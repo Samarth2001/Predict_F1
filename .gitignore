@@ -1,0 +1,5 @@
+.venv
+f1_data_real/ff1_cache/
+
+
+f1_predictor/__pycache__
