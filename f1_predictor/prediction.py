@@ -186,3 +186,32 @@ def predict_results(model, features_used, upcoming_info, historical_data, encode
     print(results_df[display_cols])
 
     return results_df
+
+def predict_with_model(X, models, model_type=config.MODEL_TYPE):
+    """
+    Make predictions using the trained model(s)
+    
+    Args:
+        X: Features DataFrame
+        models: Trained model or dict of models
+        model_type: 'lightgbm', 'xgboost', or 'ensemble'
+        
+    Returns:
+        Array of predicted positions
+    """
+    if model_type == 'ensemble':
+        # Combine predictions from multiple models
+        predictions = {}
+        for model_name, model in models.items():
+            predictions[model_name] = model.predict(X)
+        
+        # Weighted average of predictions
+        ensemble_pred = np.zeros_like(predictions[list(predictions.keys())[0]])
+        for model_name, pred in predictions.items():
+            weight = config.ENSEMBLE_WEIGHTS.get(model_name, 1.0 / len(predictions))
+            ensemble_pred += pred * weight
+            
+        return ensemble_pred
+    else:
+        # Single model prediction
+        return models.predict(X)
