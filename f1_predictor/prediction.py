@@ -20,8 +20,26 @@ def prepare_prediction_data(upcoming_info, historical_data, features_used, encod
 
     # 1. Add Actual Quali/Grid Pos (if predicting Race and data is available)
     if actual_quali is not None and not actual_quali.empty:
+        print("Incorporating qualifying data into predictions...")
+        # Ensure we're merging on the correct key column
+        if 'Driver' not in actual_quali.columns:
+            print("Error: 'Driver' column missing from actual_quali data")
+            return None
+            
+        # Debug: Print actual_quali data
+        print(f"Qualifying data before merge: {actual_quali[['Driver', 'Quali_Pos']].head()}")
+        print(f"Drivers in upcoming_info: {predict_df['Driver'].tolist()}")
+        
+        # Merge qualifying data to get Grid_Pos
         predict_df = pd.merge(predict_df, actual_quali[['Driver', 'Quali_Pos']], on='Driver', how='left')
         predict_df = predict_df.rename(columns={'Quali_Pos': 'Grid_Pos'})
+        
+        # Debug: Verify the Grid_Pos data was merged correctly
+        print(f"Grid positions after merge: {predict_df[['Driver', 'Grid_Pos']].head()}")
+        
+        # Ensure Grid_Pos is numeric
+        predict_df['Grid_Pos'] = pd.to_numeric(predict_df['Grid_Pos'], errors='coerce')
+        
         # Grid_Pos might be NaN if a driver didn't set a time - imputation will handle later
     elif 'Grid_Pos' in features_used:
          # If Grid_Pos is a required feature but actual_quali is missing, add NaN column
@@ -112,6 +130,12 @@ def prepare_prediction_data(upcoming_info, historical_data, features_used, encod
     for f in missing_cols:
         print(f"Warning: Feature '{f}' used in training is missing in prediction data. Adding as NaN.")
         calculated_features[f] = np.nan
+
+    # Debug: Check if Grid_Pos is in features_used
+    if 'Grid_Pos' in features_used:
+        print(f"Grid_Pos is used in the model. Values: {calculated_features['Grid_Pos'].tolist()}")
+    else:
+        print("Grid_Pos is NOT in the features used by the model.")
 
     # Select only the required features in the correct order
     predict_X = calculated_features[features_used].copy()

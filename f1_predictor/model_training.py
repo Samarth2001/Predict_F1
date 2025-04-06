@@ -81,6 +81,7 @@ def _train_legacy_model(features, target_column_name, model_type='qualifying'):
         # Race model SHOULD use Grid_Pos (actual quali result for that race)
         if 'Grid_Pos' in features.columns:
             feature_cols.append('Grid_Pos')
+            print("Grid_Pos added as feature for race prediction")
         else:
              print("Warning: Grid_Pos column not found for Race model training. It's a crucial feature.")
         # Remove Quali_Pos if Grid_Pos is used
@@ -114,7 +115,25 @@ def _train_legacy_model(features, target_column_name, model_type='qualifying'):
 
     # --- Train LightGBM Model ---
     print("Training LightGBM Regressor...")
-    model = lgb.LGBMRegressor(**config.LGBM_PARAMS)
+    
+    # Set up model parameters - add special weight to Grid_Pos for race model
+    lgbm_params = config.LGBM_PARAMS.copy()
+    
+    # Add feature importance weight for race model to prioritize Grid_Pos
+    if model_type == 'race' and 'Grid_Pos' in X.columns:
+        print("Enhancing Grid_Pos importance for race predictions")
+        feature_weights = None
+        # Create feature importance weights - Grid_Pos gets 3x default weight
+        if hasattr(lgb, 'create_feature_weights'):
+            feature_weights = lgb.create_feature_weights()
+            for i, col in enumerate(X.columns):
+                if col == 'Grid_Pos':
+                    feature_weights[i] = 3.0  # 3x higher importance
+        
+        if feature_weights is not None:
+            lgbm_params['feature_weights'] = feature_weights
+
+    model = lgb.LGBMRegressor(**lgbm_params)
     
     # Extremely robust LightGBM training with multiple fallback options
     try_methods = [
@@ -139,6 +158,22 @@ def _train_legacy_model(features, target_column_name, model_type='qualifying'):
         try:
             method()
             print(f"Successfully trained model using method {i+1}")
+            
+            # For race model, check if Grid_Pos is among top features
+            if model_type == 'race':
+                importance = pd.DataFrame({
+                    'Feature': X.columns,
+                    'Importance': model.feature_importances_
+                }).sort_values('Importance', ascending=False)
+                print("\nFeature Importances:")
+                print(importance.head(10))
+                
+                # Check if Grid_Pos is important enough
+                if 'Grid_Pos' in importance['Feature'].values:
+                    grid_pos_rank = importance[importance['Feature'] == 'Grid_Pos'].index[0] + 1
+                    grid_pos_importance = importance[importance['Feature'] == 'Grid_Pos']['Importance'].values[0]
+                    print(f"Grid_Pos importance rank: {grid_pos_rank}, value: {grid_pos_importance:.4f}")
+            
             break
         except Exception as e:
             if i == len(try_methods) - 1:
