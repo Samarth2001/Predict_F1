@@ -1,5 +1,66 @@
-pandas
-numpy
-scikit-learn
-lightgbm
-fastf1
+# Core Data Science Libraries
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Machine Learning
+scikit-learn>=1.3.0
+lightgbm>=4.0.0
+xgboost>=2.0.0
+catboost>=1.2.0
+tensorflow>=2.13.0
+
+# F1 Data
+fastf1>=3.3.0
+
+# Optimization and Hyperparameter Tuning
+optuna>=3.4.0
+hyperopt>=0.2.7
+skopt>=0.9.0
+
+# Feature Engineering and Selection
+category_encoders>=2.6.0
+feature_engine>=1.6.0
+imbalanced-learn>=0.11.0
+shap>=0.44.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.17.0
+bokeh>=3.2.0
+
+# API and Data Fetching
+requests>=2.31.0
+aiohttp>=3.8.0
+requests-cache>=1.1.0
+
+# Time Series and Advanced Analytics
+statsmodels>=0.14.0
+prophet>=1.1.4
+pmdarima>=2.0.0
+
+# Utilities
+joblib>=1.3.0
+tqdm>=4.66.0
+python-dateutil>=2.8.0
+pytz>=2023.3
+
+# Configuration and Logging
+pyyaml>=6.0
+click>=8.1.0
+rich>=13.0.0
+
+# Testing and Quality
+pytest>=7.4.0
+black>=23.0.0
+flake8>=6.0.0
+
+# Performance and Caching
+numba>=0.58.0
+dask>=2023.8.0
+redis>=4.6.0
+
+# Web and Dashboard (Optional)
+streamlit>=1.28.0
+dash>=2.14.0

@@ -1,5 +1,133 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+f1_data_real
+# PyInstaller
+# Usually these files are written by a PyInstaller script; this is just a
+# placeholder file if you run PyInstaller yourself.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+pytestdebug.log
+.hypothesis/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environments
+.env
 .venv
-f1_data_real/ff1_cache/
+venv/
+ENV/
+env/
 
+# Spyder project settings
+.spyderproject
+.spyproject
 
-f1_predictor/__pycache__
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype
+.pytype/
+
+# VS Code
+.vscode/
+
+# General OS generated files
+.DS_Store
+Thumbs.db
+
+# Project specific
+logs/
+models/
+predictions/
+reports/
+visualizations/
+evaluation/
+
+# Data - BUT DO NOT IGNORE THE FASTF1 CACHE
+# f1_data_real/ # This would ignore the cache
+*.csv.bak
+
+# FastF1 cache - explicitly DO NOT ignore this if you want to keep it
+# !f1_data_real/ff1_cache/
+# The above line might not work as expected depending on git version and other ignore rules.
+# The safest is to ensure f1_data_real/ is not broadly ignored, or be very specific.
+# For now, we will rely on not ignoring f1_data_real/ broadly.
+# If `f1_data_real` only contains `ff1_cache` and CSVs (which are gitignored via *.csv), this is fine.
+# Otherwise, be more specific about what inside `f1_data_real` should be ignored.
+
+# Ignore all CSV files in the root and in f1_data_real (except if needed elsewhere)
+*.csv
+/f1_data_real/*.csv
+
+# Sensitive files
+credentials.json
+*.pem
+*.key
+config.local.yaml
+
+# IDE settings folders
+.idea/
+.project
+.settings/
+*.iml
+*.iws
+
+# Debugging files
+profile_output/
