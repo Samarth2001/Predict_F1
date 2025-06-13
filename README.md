@@ -258,8 +258,8 @@ model, features, imputation = trainer.train_model(
 from f1_predictor.feature_engineering import F1FeatureEngineer
 
 engineer = F1FeatureEngineer()
-features_df, encoders = engineer.preprocess_and_engineer_features(
-    hist_races, hist_quali, curr_races, curr_quali
+features_df = engineer.engineer_features(
+    hist_races, hist_quali, curr_races, curr_quali, upcoming_info
 )
 ```
 

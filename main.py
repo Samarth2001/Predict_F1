@@ -202,17 +202,24 @@ class F1PredictionSystem:
     def _perform_feature_engineering(self, data_dict: Dict[str, Any]) -> pd.DataFrame:
         """Perform comprehensive feature engineering."""
         try:
-            features_df, encoders = self.feature_engineer.preprocess_and_engineer_features(
+            features_df = self.feature_engineer.engineer_features(
                 data_dict['hist_races'],
                 data_dict['hist_quali'],
                 data_dict['curr_races'],
-                data_dict['curr_quali']
+                data_dict['curr_quali'],
+                data_dict['upcoming_info']
             )
             
-            self.encoders = encoders
+            # Get feature importance and summary
+            feature_importance = self.feature_engineer.get_feature_importance(features_df)
+            feature_summary = self.feature_engineer.get_feature_summary()
+            
             data_dict['features_df'] = features_df  # Store for later use
+            data_dict['feature_importance'] = feature_importance
+            data_dict['feature_summary'] = feature_summary
             
             logger.info(f"Feature engineering completed: {features_df.shape}")
+            logger.info(f"Top 5 features: {list(feature_importance.keys())[:5] if feature_importance else []}")
             return features_df
             
         except Exception as e:

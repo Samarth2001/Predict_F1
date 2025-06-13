@@ -118,9 +118,11 @@ if __name__ == "__main__":
 
     # 2. Preprocess & Engineer Features
     print("Running feature engineering...")
-    features_df, encoders = feature_engineering.preprocess_and_engineer_features(
-        hist_races, hist_quali, curr_races, curr_quali
+    feature_engineer = feature_engineering.F1FeatureEngineer()
+    features_df = feature_engineer.engineer_features(
+        hist_races, hist_quali, curr_races, curr_quali, upcoming_info
     )
+    encoders = {}  # No encoders needed with new approach
     if features_df.empty:
          print("Feature engineering failed. Cannot run early predictions.")
          sys.exit(1)

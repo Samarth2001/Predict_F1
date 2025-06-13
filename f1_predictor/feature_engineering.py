@@ -178,19 +178,44 @@ class F1FeatureEngineer:
         df['Finished'] = df['Status_Cleaned'].apply(lambda x: 1 if x == 'Finished' else 0)
         df['DNF'] = df['Status_Cleaned'].apply(lambda x: 1 if x == 'DNF' else 0)
         
-        # Handle position data
+        # Handle position data - ensure proper numeric conversion
         df['Position'] = pd.to_numeric(df['Position'], errors='coerce')
         df['Grid'] = pd.to_numeric(df['Grid'], errors='coerce')
         
-        # Points calculation
+        # Clean and convert Finish_Pos_Clean
+        if 'Finish_Pos_Clean' in df.columns:
+            df['Finish_Pos_Clean'] = pd.to_numeric(df['Finish_Pos_Clean'], errors='coerce')
+        else:
+            df['Finish_Pos_Clean'] = self._clean_position(df['Position'])
+        
+        # Points calculation - only for finished races
         points_system = {1: 25, 2: 18, 3: 15, 4: 12, 5: 10, 6: 8, 7: 6, 8: 4, 9: 2, 10: 1}
         df['Points_Calculated'] = df['Position'].map(points_system).fillna(0)
         
         # Time-based features
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        df['Year'] = df['Date'].dt.year
-        df['Month'] = df['Date'].dt.month
-        df['Day_of_Year'] = df['Date'].dt.dayofyear
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'], format='mixed', errors='coerce')
+            df['Year'] = df['Date'].dt.year.fillna(df.get('Year', 2024))
+            df['Month'] = df['Date'].dt.month.fillna(6)  # Default to mid-season
+            df['Day_of_Year'] = df['Date'].dt.dayofyear.fillna(150)
+        else:
+            # Use existing Year column or default
+            df['Year'] = df.get('Year', 2024)
+            df['Month'] = 6
+            df['Day_of_Year'] = 150
+        
+        # Ensure critical columns exist and have proper defaults
+        if 'Race_Num' not in df.columns:
+            df['Race_Num'] = 1
+        if 'Circuit' not in df.columns:
+            df['Circuit'] = 'Unknown'
+        if 'Driver' not in df.columns:
+            df['Driver'] = 'UNK'
+        if 'Team' not in df.columns:
+            df['Team'] = 'Unknown Team'
+            
+        # Convert Race_Num to numeric
+        df['Race_Num'] = pd.to_numeric(df['Race_Num'], errors='coerce').fillna(1)
         
         return df
     
@@ -201,17 +226,50 @@ class F1FeatureEngineer:
         # Handle qualifying positions
         df['Position'] = pd.to_numeric(df['Position'], errors='coerce')
         
+        # Create Quali_Pos if it doesn't exist
+        if 'Quali_Pos' not in df.columns:
+            df['Quali_Pos'] = df['Position']
+        else:
+            df['Quali_Pos'] = pd.to_numeric(df['Quali_Pos'], errors='coerce')
+        
         # Convert qualifying times to seconds for analysis
-        df['Q1_Seconds'] = df['Q1'].apply(self._time_to_seconds)
-        df['Q2_Seconds'] = df['Q2'].apply(self._time_to_seconds)
-        df['Q3_Seconds'] = df['Q3'].apply(self._time_to_seconds)
+        df['Q1_Seconds'] = df['Q1'].apply(self._time_to_seconds) if 'Q1' in df.columns else np.nan
+        df['Q2_Seconds'] = df['Q2'].apply(self._time_to_seconds) if 'Q2' in df.columns else np.nan
+        df['Q3_Seconds'] = df['Q3'].apply(self._time_to_seconds) if 'Q3' in df.columns else np.nan
         
         # Best qualifying time
-        df['Best_Quali_Time'] = df[['Q1_Seconds', 'Q2_Seconds', 'Q3_Seconds']].min(axis=1)
+        time_cols = [col for col in ['Q1_Seconds', 'Q2_Seconds', 'Q3_Seconds'] if col in df.columns]
+        if time_cols:
+            df['Best_Quali_Time'] = df[time_cols].min(axis=1)
+        else:
+            df['Best_Quali_Time'] = np.nan
+        
+        # Handle qualifying time in seconds if available
+        if 'Quali_Time_Seconds' in df.columns:
+            df['Quali_Time_Seconds'] = pd.to_numeric(df['Quali_Time_Seconds'], errors='coerce')
+            # Use this as Quali_Time if Best_Quali_Time is not available
+            if df['Best_Quali_Time'].isna().all():
+                df['Best_Quali_Time'] = df['Quali_Time_Seconds']
         
         # Time-based features
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        df['Year'] = df['Date'].dt.year
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'], format='mixed', errors='coerce')
+            df['Year'] = df['Date'].dt.year.fillna(df.get('Year', 2024))
+        else:
+            df['Year'] = df.get('Year', 2024)
+        
+        # Ensure critical columns exist
+        if 'Race_Num' not in df.columns:
+            df['Race_Num'] = 1
+        if 'Circuit' not in df.columns:
+            df['Circuit'] = 'Unknown'
+        if 'Driver' not in df.columns:
+            df['Driver'] = 'UNK'
+        if 'Team' not in df.columns:
+            df['Team'] = 'Unknown Team'
+            
+        # Convert Race_Num to numeric
+        df['Race_Num'] = pd.to_numeric(df['Race_Num'], errors='coerce').fillna(1)
         
         return df
     
@@ -331,6 +389,9 @@ class F1FeatureEngineer:
         # Recent form indicators
         df = self._add_driver_form_indicators(df)
         
+        # Championship pressure features (moved here to ensure they're created early)
+        df = self._add_championship_pressure_features(df)
+        
         return df
     
     def _add_team_performance_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -426,9 +487,6 @@ class F1FeatureEngineer:
         """Add contextual features based on championship situation."""
         logger.info("Adding contextual features...")
         
-        # Championship pressure
-        df = self._add_championship_pressure_features(df)
-        
         # Home race indicators
         df = self._add_home_race_features(df)
         
@@ -510,7 +568,18 @@ class F1FeatureEngineer:
             if column not in self.target_encoders:
                 self.target_encoders[column] = TargetEncoder()
                 if 'Position' in df.columns:
-                    encoded = self.target_encoders[column].fit_transform(df[column], df['Position'])
+                    # Filter out rows with missing target values for encoding
+                    valid_mask = df['Position'].notna()
+                    if valid_mask.sum() > 0:  # Ensure we have valid data
+                        valid_df = df[valid_mask]
+                        # Fit the encoder on valid data only
+                        self.target_encoders[column].fit(valid_df[column], valid_df['Position'])
+                        # Transform all data (encoder will handle unseen categories)
+                        encoded = self.target_encoders[column].transform(df[column])
+                    else:
+                        # No valid target data, fallback to label encoding
+                        logger.warning(f"No valid target data for encoding {column}, using label encoding instead")
+                        return self._encode_categorical(df, column, 'label')
                 else:
                     # Fallback to label encoding if no target available
                     return self._encode_categorical(df, column, 'label')
@@ -520,6 +589,13 @@ class F1FeatureEngineer:
         else:
             # Default to label encoding
             return self._encode_categorical(df, column, 'label')
+        
+        # Handle 2D arrays/DataFrames from TargetEncoder - extract 1D values
+        if isinstance(encoded, pd.DataFrame):
+            # Get the values from the first (and only) column of the DataFrame
+            encoded = encoded.iloc[:, 0].values
+        elif isinstance(encoded, np.ndarray) and encoded.ndim == 2:
+            encoded = encoded.flatten()
         
         return pd.Series(encoded, index=df.index)
     
@@ -761,12 +837,25 @@ class F1FeatureEngineer:
     
     def _add_championship_pressure_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add championship pressure indicators."""
+        # Calculate driver season points first (if not already present)
+        if 'Driver_Season_Points' not in df.columns:
+            # Calculate cumulative driver points for each season
+            df_sorted = df.sort_values(['Driver', 'Year', 'Race_Num'])
+            df_sorted['Driver_Season_Points'] = df_sorted['Points_Calculated'].groupby([df_sorted['Driver'], df_sorted['Year']]).cumsum()
+            df = df_sorted.sort_index()
+        
         # Points gap to leader
         leader_points = df.groupby(['Year', 'Race_Num'])['Driver_Season_Points'].max()
         df = df.merge(leader_points.rename('Leader_Points'), left_on=['Year', 'Race_Num'], right_index=True)
         
         df['Driver_Points_Gap_To_Leader'] = df['Leader_Points'] - df['Driver_Season_Points']
         df['Driver_Championship_Pressure'] = df['Driver_Points_Gap_To_Leader'] / (df['Race_Num'] * 25)
+        
+        # Calculate driver championship position
+        df['Driver_Championship_Position'] = (
+            df.groupby(['Year', 'Race_Num'])['Driver_Season_Points']
+            .rank(method='dense', ascending=False)
+        )
         
         return df
     
@@ -885,21 +974,56 @@ class F1FeatureEngineer:
     
     def _handle_missing_values(self, df: pd.DataFrame) -> pd.DataFrame:
         """Handle missing values intelligently."""
-        # Separate numeric and categorical columns
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
-        categorical_cols = df.select_dtypes(include=['object', 'category']).columns
-        
-        # Handle numeric missing values
-        if len(numeric_cols) > 0:
-            numeric_imputer = KNNImputer(n_neighbors=5)
-            df[numeric_cols] = numeric_imputer.fit_transform(df[numeric_cols])
-        
-        # Handle categorical missing values
-        if len(categorical_cols) > 0:
-            categorical_imputer = SimpleImputer(strategy='most_frequent')
-            df[categorical_cols] = categorical_imputer.fit_transform(df[categorical_cols])
-        
-        return df
+        try:
+            # Separate numeric and categorical columns
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+            
+            # Handle numeric missing values
+            if len(numeric_cols) > 0:
+                # Check for any columns with all NaN values and handle them separately
+                all_nan_cols = [col for col in numeric_cols if df[col].isna().all()]
+                valid_numeric_cols = [col for col in numeric_cols if col not in all_nan_cols]
+                
+                # Fill all-NaN columns with 0
+                for col in all_nan_cols:
+                    df[col] = 0
+                
+                # Use KNNImputer only on columns with some valid data
+                if len(valid_numeric_cols) > 0:
+                    numeric_imputer = KNNImputer(n_neighbors=min(5, len(df)))
+                    imputed_values = numeric_imputer.fit_transform(df[valid_numeric_cols])
+                    
+                    # Ensure the imputed values have the correct shape
+                    if imputed_values.shape[1] == len(valid_numeric_cols):
+                        df[valid_numeric_cols] = imputed_values
+                    else:
+                        logger.warning("KNNImputer shape mismatch, using simple imputation instead")
+                        df[valid_numeric_cols] = df[valid_numeric_cols].fillna(df[valid_numeric_cols].median())
+            
+            # Handle categorical missing values
+            if len(categorical_cols) > 0:
+                categorical_imputer = SimpleImputer(strategy='most_frequent')
+                try:
+                    imputed_categorical = categorical_imputer.fit_transform(df[categorical_cols])
+                    if imputed_categorical.shape[1] == len(categorical_cols):
+                        df[categorical_cols] = imputed_categorical
+                    else:
+                        logger.warning("Categorical imputer shape mismatch, using forward fill instead")
+                        df[categorical_cols] = df[categorical_cols].fillna(method='ffill').fillna('Unknown')
+                except Exception as e:
+                    logger.warning(f"Categorical imputation failed: {e}, using forward fill instead")
+                    df[categorical_cols] = df[categorical_cols].fillna(method='ffill').fillna('Unknown')
+            
+            # Final cleanup - replace any remaining NaN values
+            df = df.fillna(0)
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Missing value handling failed: {e}")
+            # Fallback: simple fillna
+            return df.fillna(0)
     
     def _scale_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Scale numerical features."""
@@ -976,4 +1100,31 @@ class F1FeatureEngineer:
         }
         
         return summary
+    
+    def _clean_position(self, position: Any) -> Optional[int]:
+        """Clean and convert position to integer."""
+        if pd.isna(position):
+            return None
+        
+        try:
+            # Handle various position formats
+            if isinstance(position, str):
+                position_upper = position.upper().strip()
+                if position_upper in ['DNF', 'DNS', 'DSQ', 'NC', 'EX']:
+                    return None
+                # Extract numeric part
+                import re
+                numbers = re.findall(r'\d+', position)
+                if numbers:
+                    pos_int = int(numbers[0])
+                    # Validate reasonable position range
+                    return pos_int if 1 <= pos_int <= 30 else None
+            else:
+                pos_int = int(float(position))
+                # Validate reasonable position range
+                return pos_int if 1 <= pos_int <= 30 else None
+        except (ValueError, TypeError):
+            return None
+        
+        return None
 

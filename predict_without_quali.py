@@ -19,8 +19,9 @@ if loaded_data is None:
 hist_races, hist_quali, curr_races, curr_quali, upcoming_info, _ = loaded_data
 
 # Prepare features
-features_df, encoders = feature_engineering.preprocess_and_engineer_features(
-    hist_races, hist_quali, curr_races, curr_quali
+feature_engineer = feature_engineering.F1FeatureEngineer()
+features_df = feature_engineer.engineer_features(
+    hist_races, hist_quali, curr_races, curr_quali, upcoming_info
 )
 
 # Train race model
@@ -37,7 +38,7 @@ race_prediction = prediction.predict_results(
     features_used=race_features,
     upcoming_info=upcoming_info.copy(),
     historical_data=features_df.copy(),
-    encoders=encoders,
+    encoders={},  # No encoders needed with new approach
     imputation_values=race_imputation_values,
     actual_quali=None,  # No qualifying data
     model_type="race"
