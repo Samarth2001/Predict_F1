@@ -1,4 +1,4 @@
-# f1_predictor/__init__.py - F1 Prediction System Package
+# f1_predictor/__init__.py - F1 Prediction System v3.0
 
 """
 F1 Prediction System 2.0
@@ -15,40 +15,79 @@ Modules:
     evaluation: Model evaluation and performance analysis
 """
 
-__version__ = "2.0.0"
-__author__ = "F1 Prediction Team"
-__description__ = "Advanced F1 Prediction System with Ensemble Learning"
+from . import config
+from . import data_loader
+from . import feature_engineering
+from . import model_training
+from . import prediction
+from . import evaluation
+from . import utils
+from . import early_predictor
 
-# Import main classes for easy access
-from .config import *
+# New v3.0 modules  
+from . import config_manager
+from . import database
+from . import mlflow_integration
+
+__version__ = "3.0.0"
+__author__ = "F1 Prediction Team"
+__email__ = "contact@f1prediction.ai"
+
+# Export main classes and functions
 from .data_loader import F1DataCollector, F1DataLoader, fetch_f1_data, load_data
 from .feature_engineering import F1FeatureEngineer
 from .model_training import F1ModelTrainer, train_model
 from .prediction import F1Predictor, predict_results
 from .evaluation import F1ModelEvaluator, compare_predictions
 
+# New v3.0 exports
+from .config_manager import F1ConfigManager, get_config_manager, get_config, set_config
+from .database import F1Database, get_database
+from .mlflow_integration import F1MLflowTracker, get_mlflow_tracker
+# Schema imports temporarily disabled
+
 __all__ = [
-    # Configuration
+    # Core modules
     'config',
+    'data_loader', 
+    'feature_engineering',
+    'model_training',
+    'prediction',
+    'evaluation',
+    'utils',
+    'early_predictor',
     
-    # Data handling
+    # New v3.0 modules
+    'config_manager', 
+    'database',
+    'mlflow_integration',
+    
+    # Main classes
     'F1DataCollector',
     'F1DataLoader', 
+    'F1FeatureEngineer',
+    'F1ModelTrainer',
+    'F1Predictor',
+    'F1ModelEvaluator',
+    
+    # New v3.0 classes
+    'F1ConfigManager',
+    'F1Database',
+    'F1MLflowTracker',
+    
+    # Functions
     'fetch_f1_data',
     'load_data',
-    
-    # Feature engineering
-    'F1FeatureEngineer',
-    
-    # Model training
-    'F1ModelTrainer',
-    'train_model',
-    
-    # Prediction
-    'F1Predictor',
+    'train_model', 
     'predict_results',
+    'compare_predictions',
     
-    # Evaluation
-    'F1ModelEvaluator',
-    'compare_predictions'
+    # New v3.0 functions
+    'get_config_manager',
+    'get_config',
+    'set_config',
+    'get_database',
+    'get_mlflow_tracker',
+    
+    # Schemas (temporarily disabled)
 ]

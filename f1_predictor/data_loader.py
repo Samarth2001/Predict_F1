@@ -173,6 +173,12 @@ class F1DataCollector:
                 event_name = event.get('EventName', f'Round {event.get("RoundNumber")}') # Use RoundNum if EventName is missing
                 round_num = event.get('RoundNumber')
                 event_date_obj = pd.to_datetime(event.get('EventDate', 'today'))
+                
+                # Skip pre-season testing events (round 0) as they can't be fetched by round number
+                if round_num == 0:
+                    logger.info(f"  Skipping pre-season testing event: {year} Round {round_num} ({event_name})")
+                    continue
+                
                 # Only process events up to the current date + a small buffer (e.g., 7 days for race weekend completion)
                 if event_date_obj > datetime.now() + timedelta(days=config.FUTURE_EVENT_BUFFER_DAYS):
                     logger.info(f"  Skipping future event: {year} Round {round_num} ({event_name}) scheduled for {event_date_obj.date()}")
@@ -251,15 +257,7 @@ class F1DataCollector:
                 logger.info(f"    Successfully fetched {session_code} for {year} {event_display_name}.")
                 return data
 
-            except fastf1.ergast.ErgastMissingDataError as e: # Lower frequency data source
-                logger.warning(f"    No data for {session_code} at {year} {event_display_name} on Ergast: {e}")
-                self.failed_sessions.add(f"{year}-{actual_round_num}-{session_code}-ErgastMissingData")
-                return None # No data available, don't retry for this specific error
-            except fastf1.api.SessionNotAvailableError as e: # API says session doesn't exist
-                logger.warning(f"    Session {session_code} for {year} {event_display_name} (Round {actual_round_num}) not available via API: {e}")
-                self.failed_sessions.add(f"{year}-{actual_round_num}-{session_code}-NotAvailable")
-                return None # Session doesn't exist or not loadable, don't retry
-            except fastf1.req.RateLimitExceededError as e:
+            except fastf1.RateLimitExceededError as e:
                 logger.warning(f"    Rate limit hit fetching {session_code} for {year} {event_display_name}. Attempt {attempt + 1}/{max_retries}. {e}")
                 self.failed_sessions.add(f"{year}-{actual_round_num}-{session_code}-RateLimited")
                 if attempt < max_retries - 1:
@@ -270,11 +268,14 @@ class F1DataCollector:
                     logger.error(f"    Max retries ({max_retries}) reached for {session_code} at {year} {event_display_name} due to rate limiting.")
                     return None
             except Exception as e:
-                # Catching a broader range of fastf1 specific errors or general issues during load
-                if "SessionNotAvailableError" in str(e) or "EventNotAvailable" in str(e) or "No data for this session" in str(e):
-                     logger.warning(f"    Session data appears unavailable for {session_code} at {year} {event_display_name}: {e}")
-                     self.failed_sessions.add(f"{year}-{actual_round_num}-{session_code}-LoadErrorNotAvailable")
-                     return None # Treat as not available
+                # Handle various session/data availability errors
+                error_str = str(e).lower()
+                if any(keyword in error_str for keyword in ['sessionnotavailable', 'eventnotavailable', 'no data for this session', 
+                                                           'cannot get testing event', 'missing data']):
+                    logger.warning(f"    Session data appears unavailable for {session_code} at {year} {event_display_name}: {e}")
+                    self.failed_sessions.add(f"{year}-{actual_round_num}-{session_code}-NotAvailable")
+                    return None # Treat as not available, don't retry
+                
                 logger.error(f"    Failed to load/process {session_code} for {year} {event_display_name} (Round {actual_round_num}), attempt {attempt + 1}: {e}", exc_info=True)
                 self.failed_sessions.add(f"{year}-{actual_round_num}-{session_code}-LoadProcessError")
                 # For general errors, also retry with backoff
@@ -483,8 +484,8 @@ class F1DataCollector:
                     "missing_values_per_column": df.isnull().sum().to_dict(),
                     "unique_drivers": df['Driver'].nunique() if 'Driver' in df.columns else 0,
                     "unique_circuits": df['Circuit'].nunique() if 'Circuit' in df.columns else 0,
-                    "min_year": int(df['Year'].min()) if 'Year' in df.columns and not df['Year'].empty else None,
-                    "max_year": int(df['Year'].max()) if 'Year' in df.columns and not df['Year'].empty else None,
+                    "min_year": int(df['Year'].min()) if 'Year' in df.columns and len(df['Year'].dropna()) > 0 else None,
+                    "max_year": int(df['Year'].max()) if 'Year' in df.columns and len(df['Year'].dropna()) > 0 else None,
                 }
                 report["data_metrics"][name] = metrics
             else:
@@ -553,7 +554,8 @@ class F1DataLoader:
         try:
             if os.path.exists(config.RACES_CSV_PATH):
                 races_df = pd.read_csv(config.RACES_CSV_PATH)
-                races_df['Date'] = pd.to_datetime(races_df['Date'])
+                # Fix date parsing with mixed format
+                races_df['Date'] = pd.to_datetime(races_df['Date'], format='mixed', errors='coerce')
                 
                 # Filter to valid years
                 current_year = datetime.now().year
@@ -574,7 +576,8 @@ class F1DataLoader:
         try:
             if os.path.exists(config.QUALI_CSV_PATH):
                 quali_df = pd.read_csv(config.QUALI_CSV_PATH)
-                quali_df['Date'] = pd.to_datetime(quali_df['Date'])
+                # Fix date parsing with mixed format
+                quali_df['Date'] = pd.to_datetime(quali_df['Date'], format='mixed', errors='coerce')
                 
                 # Filter to valid years
                 current_year = datetime.now().year

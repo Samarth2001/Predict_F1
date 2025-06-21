@@ -28,6 +28,8 @@ except ImportError:
     logging.warning("Optuna not available. Hyperparameter optimization disabled.")
 
 from . import config
+from .config_manager import get_config
+from .mlflow_integration import start_mlflow_run, log_model_training, end_mlflow_run
 
 # Set up logging
 logging.basicConfig(level=getattr(logging, config.LOG_LEVEL))
@@ -59,37 +61,79 @@ class F1ModelTrainer:
         """
         logger.info(f"Starting {model_type} model training...")
         
-        # Prepare data
-        X, y, feature_names, imputation_values = self._prepare_training_data(features, target_column_name)
+        # Start MLflow run
+        run_id = start_mlflow_run(f"{model_type}_training")
         
-        if len(X) == 0:
-            logger.error("No training data available.")
-            return None, [], {}
-        
-        # Split data with time-aware splitting
-        X_train, X_test, y_train, y_test = self._split_data_time_aware(X, y, features)
-        
-        # Train model based on type
-        if config.DEFAULT_MODEL_TYPE == 'ensemble':
-            model = self._train_ensemble_model(X_train, y_train, X_test, y_test, model_type)
-        else:
-            model = self._train_single_model(X_train, y_train, X_test, y_test, config.DEFAULT_MODEL_TYPE, model_type)
-        
-        if model is None:
-            logger.error("Model training failed.")
-            return None, [], {}
-        
-        # Evaluate model
-        self._evaluate_model(model, X_test, y_test, model_type)
-        
-        # Feature importance analysis
-        self._analyze_feature_importance(model, feature_names, model_type)
-        
-        # Save model
-        self._save_model(model, feature_names, imputation_values, model_type)
-        
-        logger.info(f"{model_type} model training completed successfully.")
-        return model, feature_names, imputation_values
+        try:
+            # Prepare data
+            X, y, feature_names, imputation_values = self._prepare_training_data(features, target_column_name)
+            
+            if len(X) == 0:
+                logger.error("No training data available.")
+                return None, [], {}
+            
+            # Create feature hash for versioning
+            import hashlib
+            feature_str = '|'.join(sorted(feature_names))
+            feature_hash = hashlib.sha256(feature_str.encode()).hexdigest()
+            
+            # Split data with time-aware splitting
+            X_train, X_test, y_train, y_test = self._split_data_time_aware(X, y, features)
+            
+            # Train model based on type
+            default_type = get_config('model.default_type', 'ensemble')
+            if default_type == 'ensemble':
+                model = self._train_ensemble_model(X_train, y_train, X_test, y_test, model_type)
+                algorithm = 'ensemble'
+            else:
+                model = self._train_single_model(X_train, y_train, X_test, y_test, default_type, model_type)
+                algorithm = default_type
+            
+            if model is None:
+                logger.error("Model training failed.")
+                return None, [], {}
+            
+            # Evaluate model
+            performance_metrics = self._evaluate_model(model, X_test, y_test, model_type)
+            
+            # Feature importance analysis
+            self._analyze_feature_importance(model, feature_names, model_type)
+            
+            # Create model metadata
+            class SimpleMetadata:
+                def __init__(self, **kwargs):
+                    for k, v in kwargs.items():
+                        setattr(self, k, v)
+                        
+            model_metadata = SimpleMetadata(
+                model_type=model_type,
+                algorithm=algorithm,
+                feature_hash=feature_hash,
+                feature_names=feature_names,
+                hyperparameters=get_config(f'model.{algorithm}', {}),
+                performance_metrics=performance_metrics or {},
+                imputation_values=imputation_values,
+                version="3.0.0"
+            )
+            
+            # Log to MLflow
+            log_model_training(
+                model=model,
+                model_metadata=model_metadata,
+                feature_names=feature_names,
+                hyperparameters=get_config(f'model.{algorithm}', {}),
+                performance_metrics=performance_metrics or {}
+            )
+            
+            # Save model
+            self._save_model(model, feature_names, imputation_values, model_type)
+            
+            logger.info(f"{model_type} model training completed successfully.")
+            return model, feature_names, imputation_values
+            
+        finally:
+            # End MLflow run
+            end_mlflow_run()
     
     def _prepare_training_data(self, features: pd.DataFrame, target_column: str) -> Tuple[np.ndarray, np.ndarray, List[str], Dict]:
         """Prepare data for training with proper preprocessing."""
@@ -458,7 +502,7 @@ class F1ModelTrainer:
         
         return best_model
     
-    def _evaluate_model(self, model: Any, X_test: np.ndarray, y_test: np.ndarray, model_type: str):
+    def _evaluate_model(self, model: Any, X_test: np.ndarray, y_test: np.ndarray, model_type: str) -> Dict[str, float]:
         """Comprehensive model evaluation."""
         try:
             # Handle neural network scaling
@@ -501,8 +545,11 @@ class F1ModelTrainer:
             # Save metrics
             self._save_evaluation_metrics(metrics, model_type)
             
+            return metrics
+            
         except Exception as e:
             logger.error(f"Model evaluation failed: {e}")
+            return {}
     
     def _analyze_feature_importance(self, model: Any, feature_names: List[str], model_type: str):
         """Analyze and save feature importance."""
