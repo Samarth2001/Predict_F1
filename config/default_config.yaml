@@ -1,161 +1,198 @@
-# F1 Prediction System Configuration v3.0
+# config/default_config.yaml
 
-# Model Configuration
-model:
-  default_type: "ensemble"
-  algorithms:
-    - "lightgbm"
-    - "xgboost" 
-    - "random_forest"
-    - "neural_network"
-  
-  # Ensemble weights (auto-optimized if null)
-  ensemble_weights:
-    lightgbm: 0.30
-    xgboost: 0.25
-    random_forest: 0.20
-    neural_network: 0.25
-  
-  # LightGBM parameters
-  lightgbm:
-    objective: "regression"
-    metric: "mae"
-    boosting_type: "gbdt"
-    n_estimators: 3000
-    learning_rate: 0.015
-    max_depth: 10
-    num_leaves: 127
-    feature_fraction: 0.8
-    bagging_fraction: 0.8
-    bagging_freq: 7
-    min_child_samples: 25
-    min_split_gain: 0.01
-    reg_alpha: 0.15
-    reg_lambda: 0.25
-    random_state: 42
-    n_jobs: -1
-    verbose: -1
-    early_stopping_rounds: 200
-  
-  # XGBoost parameters
-  xgboost:
-    objective: "reg:absoluteerror"
-    eval_metric: "mae"
-    n_estimators: 3000
-    learning_rate: 0.015
-    max_depth: 10
-    colsample_bytree: 0.8
-    subsample: 0.8
-    min_child_weight: 25
-    alpha: 0.15
-    lambda: 0.25
-    random_state: 42
-    n_jobs: -1
-    verbosity: 0
-    tree_method: "hist"
-    early_stopping_rounds: 200
+# ============================================================================
+# GENERAL CONFIGURATION
+# ============================================================================
+general:
+  model_version: "2.0.0"
+  random_state: 42
+  enable_feature_selection: true
+  max_features_selection: 100
+  # Set to your desired logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_level: "INFO"
 
-# Feature Engineering Configuration
-features:
+# ============================================================================
+# PATH CONFIGURATION
+# All paths are relative to the project's base directory.
+# ============================================================================
+paths:
+  data_dir: "f1_data_real"
+  cache_dir: "f1_data_real/ff1_cache"
+  models_dir: "models"
+  logs_dir: "logs"
+  predictions_dir: "predictions"
+  evaluation_dir: "evaluation"
+  visualizations_dir: "visualizations"
+  reports_dir: "reports"
+  races_csv: "f1_data_real/all_races_data.csv"
+  quali_csv: "f1_data_real/all_quali_data.csv"
+  weather_csv: "f1_data_real/weather_data.csv"
+  log_file_prefix: "f1_predictor"
+
+# ============================================================================
+# DATA COLLECTION CONFIGURATION
+# ============================================================================
+data_collection:
+  start_year: 2018
+  # 'auto' will use the current year
+  current_season: 'auto'
+  end_year: 'auto'
+  # Settings for FastF1 API interaction
+  fastf1:
+    fetch_delay: 1.5
+    api_retry_delay: 60
+    api_max_retries: 5
+    timeout_seconds: 45
+    cache_expiry_hours: 24
+    parallel_sessions: 4
+  # Configuration for external APIs
+  external_apis:
+    # Sign up for a free key at https://openweathermap.org/
+    openweathermap_api_key: "YOUR_API_KEY_HERE"
+    ergast_api_base_url: "http://ergast.com/api/f1"
+    rate_limit_per_minute: 60
+
+# ============================================================================
+# FEATURE ENGINEERING CONFIGURATION
+# ============================================================================
+feature_engineering:
   rolling_windows:
     short: 3
     medium: 5
     long: 10
     season: 23
-  
+  min_races_for_driver_features: 5
+  min_races_for_team_features: 3
+  finished_statuses: ['Finished', '+1 Lap', '+2 Laps', '+3 Laps', '+4 Laps', '+5 Laps']
+  dnf_statuses: ['Accident', 'Collision', 'Engine', 'Gearbox', 'Hydraulics', 'Transmission', 'Electrical', 'Brakes', 'Suspension', 'Power Unit', 'Clutch', 'Wheel', 'Fuel System']
   circuit_categories:
-    street: ["Monaco", "Singapore", "Baku", "Las Vegas", "Miami", "Jeddah"]
-    high_speed: ["Monza", "Spa-Francorchamps", "Silverstone", "Suzuka", "Bahrain"]
-    technical: ["Monaco", "Singapore", "Hungary", "Spain", "Abu Dhabi"]
-    power_sensitive: ["Monza", "Spa-Francorchamps", "Baku", "Las Vegas"]
-    aero_sensitive: ["Monaco", "Singapore", "Hungary", "Spain"]
-  
-  min_data_requirements:
-    driver_features: 5
-    team_features: 3
-    circuit_features: 2
-  
-  correlation_threshold: 0.95
-  max_features_selection: 50
+    street: ['Monaco Grand Prix', 'Singapore Grand Prix', 'Azerbaijan Grand Prix', 'Las Vegas Grand Prix', 'Miami Grand Prix', 'Saudi Arabian Grand Prix']
+    high_speed: ['Italian Grand Prix', 'Belgian Grand Prix', 'British Grand Prix', 'Japanese Grand Prix', 'Bahrain Grand Prix']
+    technical: ['Hungarian Grand Prix', 'Spanish Grand Prix', 'Abu Dhabi Grand Prix']
+  weather_impact:
+    rain_probability_threshold: 30
+    optimal_temp_range: [20, 30]
+    wind_speed_threshold: 25
 
-# Data Collection Configuration
-data:
-  start_year: 2018
-  current_season: 2025
+# ============================================================================
+# MODEL CONFIGURATION
+# ============================================================================
+models:
+  # 'ensemble' is recommended for best performance
+  default_model_type: "ensemble"
+  available: ['lightgbm', 'xgboost', 'random_forest', 'ensemble']
   
-  # API settings
-  api:
-    fetch_delay: 1.5
-    retry_delay: 60
-    max_retries: 5
-    timeout_seconds: 45
-    cache_expiry_hours: 24
-  
-  # Database settings
-  database:
-    type: "duckdb"
-    path: "f1_data_real/f1_prediction.db"
-    backup_enabled: true
+  # Parameters for individual models
+  lightgbm_params:
+    objective: 'regression_l1'
+    metric: 'mae'
+    n_estimators: 2000
+    learning_rate: 0.02
+    feature_fraction: 0.8
+    bagging_fraction: 0.8
+    bagging_freq: 1
+    lambda_l1: 0.1
+    lambda_l2: 0.1
+    num_leaves: 31
+    verbose: -1
+    n_jobs: -1
+    seed: 42
+    boosting_type: 'gbdt'
 
-# Training Configuration
+  xgboost_params:
+    objective: 'reg:squarederror'
+    eval_metric: 'mae'
+    n_estimators: 2000
+    learning_rate: 0.02
+    max_depth: 7
+    subsample: 0.8
+    colsample_bytree: 0.8
+    gamma: 0.1
+    random_state: 42
+    n_jobs: -1
+
+  random_forest_params:
+    n_estimators: 500
+    max_depth: 15
+    min_samples_split: 5
+    min_samples_leaf: 2
+    random_state: 42
+    n_jobs: -1
+
+  # Configuration for the ensemble model
+  ensemble_config:
+    base_models: ['lightgbm', 'xgboost']
+    # Weights will be optimized if optimize_weights is true
+    weights: [0.5, 0.5]
+    optimize_weights: true
+
+# ============================================================================
+# TRAINING AND VALIDATION CONFIGURATION
+# ============================================================================
 training:
-  test_size: 0.15
-  validation_size: 0.15
-  cv_folds: 7
-  random_state: 42
+  # Configuration for train-validation-test split
+  split_config:
+    test_size: 0.15
+    validation_size: 0.15
+    time_aware_split: true
+    stratify_by: ['Year']
   
-  # Optimization
-  hyperparameter_optimization:
-    enabled: true
-    n_trials: 150
-    timeout_hours: 4
-    metric: "mae"
-    direction: "minimize"
+  # Configuration for cross-validation
+  cv_config:
+    cv_folds: 5
+    cv_strategy: 'time_series' # 'time_series' or 'stratified'
+    cv_group_by: 'Year'
   
-  # Early stopping
-  early_stopping:
-    rounds: 250
-    metric: "mae"
-    tolerance: 1e-6
+  # Configuration for model training process
+  training_config:
+    early_stopping_rounds: 100
+    early_stopping_metric: 'mae'
 
-# Prediction Configuration
+# ============================================================================
+# HYPERPARAMETER OPTIMIZATION (OPTUNA)
+# ============================================================================
+hyperparameter_optimization:
+  enabled: true
+  n_trials: 100
+  timeout_hours: 2
+  optimization_metric: 'mae'
+  optimization_direction: 'minimize'
+  
+  # Search spaces for hyperparameters
+  param_search_spaces:
+    lightgbm:
+      n_estimators: [1000, 5000]
+      learning_rate: [0.01, 0.05]
+      max_depth: [7, 15]
+      num_leaves: [31, 127]
+    xgboost:
+      n_estimators: [1000, 5000]
+      learning_rate: [0.01, 0.05]
+      max_depth: [7, 15]
+
+# ============================================================================
+# PREDICTION WORKFLOW CONFIGURATION
+# ============================================================================
 prediction:
+  # Confidence thresholds for categorizing predictions
   confidence_thresholds:
-    very_high: 0.9
-    high: 0.8
-    medium: 0.6
-    low: 0.4
-    very_low: 0.2
+    high: 0.80
+    medium: 0.60
+    low: 0.40
   
+  # Default values for features if they are missing during prediction
   imputation_defaults:
-    grid_pos: 15.0
-    quali_pos: 15.0
-    driver_avg_finish: 12.0
-    team_avg_finish: 12.0
-    weather_temp: 25.0
-    weather_humidity: 60.0
+    Grid_Pos: 15.0
+    Quali_Pos: 15.0
+    Weather_Temp: 25.0
 
-# MLflow Configuration
-mlflow:
-  tracking_uri: "file:./mlruns"
-  experiment_name: "f1_prediction_v3"
-  log_models: true
-  log_artifacts: true
-  
-# Logging Configuration
-logging:
-  level: "INFO"
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s"
-  file_path: "logs/f1_predictor.log"
-  max_file_size_mb: 100
-  backup_count: 5
-
-# Performance Configuration
-performance:
-  use_polars: true
-  parallel_processing: true
-  memory_optimization: true
-  cache_features: true
-  max_memory_gb: 8
-  n_jobs: -1
-  chunk_size: 10000 
+# ============================================================================
+# EVALUATION CONFIGURATION
+# ============================================================================
+evaluation:
+  # Metrics to calculate for evaluating model performance
+  metrics: ['mae', 'rmse', 'r2', 'spearman_correlation', 'top3_accuracy', 'top5_accuracy']
+  # Hold out one or more recent years for final testing
+  holdout_years: [2024]
+  # Number of iterations for bootstrap confidence intervals
+  bootstrap_iterations: 1000 

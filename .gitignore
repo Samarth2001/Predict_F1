@@ -133,3 +133,6 @@ config.local.yaml
 
 # Debugging files
 profile_output/
+ 
+f1_data_real/all_quali_data.csv
+f1_data_real/all_races_data.csv
