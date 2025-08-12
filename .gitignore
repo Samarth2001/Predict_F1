@@ -94,13 +94,16 @@ dmypy.json
 .DS_Store
 Thumbs.db
 
-# Project specific
+# Project specific (generated artifacts)
 logs/
 models/
 predictions/
 reports/
 visualizations/
 evaluation/
+f1_data_real/features_cache/
+f1_data_real/http_cache*
+*.pkl
 
 # Data - BUT DO NOT IGNORE THE FASTF1 CACHE
 # f1_data_real/ # This would ignore the cache
@@ -114,7 +117,7 @@ evaluation/
 # If `f1_data_real` only contains `ff1_cache` and CSVs (which are gitignored via *.csv), this is fine.
 # Otherwise, be more specific about what inside `f1_data_real` should be ignored.
 
-# Ignore all CSV files in the root and in f1_data_real (except if needed elsewhere)
+# Ignore CSV files in the root and in f1_data_real (pipeline outputs and raw dumps)
 *.csv
 /f1_data_real/*.csv
 
@@ -122,7 +125,10 @@ evaluation/
 credentials.json
 *.pem
 *.key
-config.local.yaml
+config/local.yaml
+config/local.yml
+.env.local
+.env.*.local
 
 # IDE settings folders
 .idea/
@@ -136,3 +142,11 @@ profile_output/
  
 f1_data_real/all_quali_data.csv
 f1_data_real/all_races_data.csv
+.cursor/rules/06-data-and-artifacts.mdc
+.cursor/rules/05-workflows-and-commands.mdc
+.cursor/rules/04-python-style.mdc
+.cursor/rules/03-configuration.mdc
+.cursor/rules/02-ml-pipeline-and-modules.mdc
+.cursor/rules/01-project-structure.mdc
+GEMINI.md
+score.py

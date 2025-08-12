@@ -1,0 +1,7 @@
+# Local overrides (gitignored). Copy to config/local.yaml and edit as needed.
+# Supports environment variable expansion: ${VAR} or ${VAR:-default}
+
+data_collection:
+  external_apis:
+    # e.g., set in your shell: $Env:OPENWEATHER_API_KEY="..." (Windows PowerShell)
+    openweathermap_api_key: "${OPENWEATHER_API_KEY:-}"
