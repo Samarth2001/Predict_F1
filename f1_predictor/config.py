@@ -1,4 +1,3 @@
-# f1_predictor/config.py
 """
 This module provides access to the application's configuration.
 
@@ -13,7 +12,5 @@ To access configuration values, import the `config` object and use it like a dic
     api_retries = config['data_collection.api_max_retries']
 """
 from .config_manager import config_manager
-
-# Make the config_manager instance available for import
 config = config_manager
 

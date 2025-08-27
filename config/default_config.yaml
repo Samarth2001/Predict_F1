@@ -1,23 +1,31 @@
-# config/default_config.yaml
-
-# ============================================================================
-# GENERAL CONFIGURATION
-# ============================================================================
 general:
   model_version: "2.0.0"
   random_state: 42
+  # Backward-compat fallback used by some utilities
+  random_seed: 42
   enable_feature_selection: true
   max_features_selection: 100
   # Set to your desired logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
   log_level: "INFO"
+  # Optional experiment tracking via MLflow
+  mlflow:
+    enabled: false
+    tracking_uri: "${MLFLOW_TRACKING_URI:-}"
+    experiment_name: "f1_prediction"
+  strict_feature_enforcement: true
+  # If set, missing columns listed here are considered critical and will cause predictions to fail fast
+  critical_features: []
 
-# ============================================================================
-# PATH CONFIGURATION
-# All paths are relative to the project's base directory.
-# ============================================================================
+  # Parallel and determinism knobs
+  parallel:
+    # Limit threads used by underlying estimators during our outer parallelism
+    limit_estimator_threads: true
+    estimator_n_jobs: 1
+
 paths:
   data_dir: "f1_data_real"
   cache_dir: "f1_data_real/ff1_cache"
+  features_cache_dir: "f1_data_real/features_cache"
   models_dir: "models"
   logs_dir: "logs"
   predictions_dir: "predictions"
@@ -27,16 +35,13 @@ paths:
   races_csv: "f1_data_real/all_races_data.csv"
   quali_csv: "f1_data_real/all_quali_data.csv"
   weather_csv: "f1_data_real/weather_data.csv"
+  ingestion_state: "f1_data_real/ingestion_state.json"
   log_file_prefix: "f1_predictor"
-
-# ============================================================================
-# DATA COLLECTION CONFIGURATION
-# ============================================================================
 data_collection:
   start_year: 2018
   # 'auto' will use the current year
-  current_season: 'auto'
-  end_year: 'auto'
+  current_season: "auto"
+  end_year: "auto"
   # Settings for FastF1 API interaction
   fastf1:
     fetch_delay: 1.5
@@ -48,44 +53,166 @@ data_collection:
   # Configuration for external APIs
   external_apis:
     # Sign up for a free key at https://openweathermap.org/
-    openweathermap_api_key: "YOUR_API_KEY_HERE"
+    # Supports env var expansion: ${OPENWEATHER_API_KEY} or ${OPENWEATHER_API_KEY:-fallback}
+    openweathermap_api_key: "${OPENWEATHER_API_KEY:-}"
     ergast_api_base_url: "http://ergast.com/api/f1"
     rate_limit_per_minute: 60
+    # TTL for HTTP cache (OpenWeather etc.), in hours
+    openweather_cache_ttl_hours: 12
 
-# ============================================================================
-# FEATURE ENGINEERING CONFIGURATION
-# ============================================================================
 feature_engineering:
+  # Defines the sequence of feature engineering steps to be executed.
+  # Available steps: "RollingPerformanceEngineer", "WeatherFeatureEngineer", "FeatureOptimizer"
+  pipeline_steps:
+    - "RollingPerformanceEngineer"
+    - "TimeDecayEngineer"
+    - "CircuitTypeEngineer"
+    - "CircuitAggregatesEngineer"
+    - "SeasonProgressEngineer"
+    - "ClusterPerformanceEngineer"
+    - "TeammateFeaturesEngineer"
+    - "SprintFeatureEngineer"
+    - "QualiDeltaEngineer"
+    - "GridUpliftEngineer"
+    - "InteractionFeaturesEngineer"
+    - "WeatherFeatureEngineer"
+    - "FeatureOptimizer"
+
+  # Configuration for the imputation of missing values.
+  imputation:
+    numeric_strategy: "median" # Options: "mean", "median", "most_frequent", "constant"
+    numeric_fill_value: null # Required only if numeric_strategy is "constant"
+    categorical_strategy: "most_frequent" # Options: "most_frequent", "constant"
+    categorical_fill_value: "Unknown" # Required only if categorical_strategy is "constant"
+
+  rolling_metrics: ["Position", "Quali_Pos", "DNF"]
+
   rolling_windows:
-    short: 3
-    medium: 5
-    long: 10
-    season: 23
+    - { name: "short", size: 3 }
+    - { name: "medium", size: 5 }
+    - { name: "long", size: 10 }
+    - { name: "season", size: 23 }
   min_races_for_driver_features: 5
   min_races_for_team_features: 3
-  finished_statuses: ['Finished', '+1 Lap', '+2 Laps', '+3 Laps', '+4 Laps', '+5 Laps']
-  dnf_statuses: ['Accident', 'Collision', 'Engine', 'Gearbox', 'Hydraulics', 'Transmission', 'Electrical', 'Brakes', 'Suspension', 'Power Unit', 'Clutch', 'Wheel', 'Fuel System']
+  finished_statuses:
+    ["Finished", "+1 Lap", "+2 Laps", "+3 Laps", "+4 Laps", "+5 Laps"]
+  dnf_statuses:
+    [
+      "Accident",
+      "Collision",
+      "Engine",
+      "Gearbox",
+      "Hydraulics",
+      "Transmission",
+      "Electrical",
+      "Brakes",
+      "Suspension",
+      "Power Unit",
+      "Clutch",
+      "Wheel",
+      "Fuel System",
+    ]
   circuit_categories:
-    street: ['Monaco Grand Prix', 'Singapore Grand Prix', 'Azerbaijan Grand Prix', 'Las Vegas Grand Prix', 'Miami Grand Prix', 'Saudi Arabian Grand Prix']
-    high_speed: ['Italian Grand Prix', 'Belgian Grand Prix', 'British Grand Prix', 'Japanese Grand Prix', 'Bahrain Grand Prix']
-    technical: ['Hungarian Grand Prix', 'Spanish Grand Prix', 'Abu Dhabi Grand Prix']
+    street:
+      [
+        "Monaco",
+        "Singapore",
+        "Azerbaijan",
+        "Las Vegas",
+        "Miami",
+        "Saudi Arabian",
+      ]
+    high_speed: ["Italian", "Belgian", "British", "Japanese", "Bahrain"]
+    technical: ["Hungarian", "Spanish", "Abu Dhabi"]
   weather_impact:
     rain_probability_threshold: 30
     optimal_temp_range: [20, 30]
     wind_speed_threshold: 25
 
-# ============================================================================
-# MODEL CONFIGURATION
-# ============================================================================
+  # Time-decay configuration for recency-weighted features
+  time_decay:
+    enabled: true
+    use_ewm: true
+    apply_to: ["Position", "Quali_Pos", "DNF"]
+    # EWM spans aligned with rolling windows above
+    spans:
+      short: 3
+      medium: 5
+      long: 10
+      season: 23
+
+  # Sprint handling
+  sprint_handling:
+    enabled: true
+    separate_windows: true
+
+  # Teammate and hierarchical form features
+  teammate_features:
+    enabled: true
+
+  hierarchical_form:
+    enabled: true
+
+  # Track meta and clustering
+  track_meta:
+    num_circuit_clusters: 4
+    pit_loss_by_circuit: {}
+    overtake_difficulty_by_circuit: {}
+    expected_stops_by_circuit: {}
+    sc_probability_by_circuit: {}
+    track_position_importance_by_circuit: {}
+    tyre_degradation_by_circuit: {}
+  circuit_locations: {}
+
+  # Feature governance
+  governance:
+    allowlists:
+      qualifying: []
+      race: []
+    per_event_zscore:
+      enabled: false
+
+  weather_forecast:
+    use_openweathermap: true
+    hours_ahead: 24
+
+  # Feature caching
+  cache:
+    enabled: true
+
+  # Canonicalization maps to stabilize entity names across seasons
+  canonicalization:
+    drivers: {}
+    teams: {}
 models:
   # 'ensemble' is recommended for best performance
   default_model_type: "ensemble"
-  available: ['lightgbm', 'xgboost', 'random_forest', 'ensemble']
-  
+  available:
+    [
+      "lightgbm",
+      "xgboost",
+      "random_forest",
+      "ensemble",
+      "lightgbm_ranker",
+      "xgboost_ranker",
+    ]
+
+  # Per-target overrides
+  qualifying:
+    use_ranking: true
+    base_models: ["lightgbm_ranker", "xgboost_ranker"]
+    overrides: {}
+  race:
+    use_ranking: true
+    enable_dnf_model: true
+    default_dnf_position: 20
+    base_models: ["lightgbm_ranker", "xgboost_ranker"]
+    overrides: {}
+
   # Parameters for individual models
   lightgbm_params:
-    objective: 'regression_l1'
-    metric: 'mae'
+    objective: "regression_l1"
+    metric: "mae"
     n_estimators: 2000
     learning_rate: 0.02
     feature_fraction: 0.8
@@ -97,11 +224,11 @@ models:
     verbose: -1
     n_jobs: -1
     seed: 42
-    boosting_type: 'gbdt'
+    boosting_type: "gbdt"
 
   xgboost_params:
-    objective: 'reg:squarederror'
-    eval_metric: 'mae'
+    objective: "reg:squarederror"
+    eval_metric: "mae"
     n_estimators: 2000
     learning_rate: 0.02
     max_depth: 7
@@ -119,45 +246,105 @@ models:
     random_state: 42
     n_jobs: -1
 
+  # Ranking models
+  lightgbm_ranker_params:
+    objective: "lambdarank"
+    metric: "ndcg"
+    n_estimators: 1500
+    learning_rate: 0.05
+    num_leaves: 63
+    subsample: 0.8
+    colsample_bytree: 0.8
+    reg_alpha: 0.1
+    reg_lambda: 0.1
+    n_jobs: -1
+    verbose: -1
+
+  xgboost_ranker_params:
+    objective: "rank:pairwise"
+    eval_metric: "ndcg"
+    n_estimators: 1500
+    learning_rate: 0.05
+    max_depth: 7
+    subsample: 0.8
+    colsample_bytree: 0.8
+    reg_alpha: 0.1
+    reg_lambda: 0.1
+    n_jobs: -1
+    random_state: 42
+
+  # Classification models for DNF
+  lightgbm_classifier_params:
+    objective: "binary"
+    metric: "auc"
+    n_estimators: 1000
+    learning_rate: 0.05
+    num_leaves: 63
+    subsample: 0.8
+    colsample_bytree: 0.8
+    n_jobs: -1
+    verbose: -1
+
+  xgboost_classifier_params:
+    objective: "binary:logistic"
+    eval_metric: "auc"
+    n_estimators: 1000
+    learning_rate: 0.05
+    max_depth: 6
+    subsample: 0.8
+    colsample_bytree: 0.8
+    n_jobs: -1
+    random_state: 42
+
   # Configuration for the ensemble model
   ensemble_config:
-    base_models: ['lightgbm', 'xgboost']
+    base_models: ["lightgbm", "xgboost"]
     # Weights will be optimized if optimize_weights is true
     weights: [0.5, 0.5]
     optimize_weights: true
+    target_metric: spearman   # options: mae, spearman, ndcg
+    random_weight_samples: 1000
 
-# ============================================================================
-# TRAINING AND VALIDATION CONFIGURATION
-# ============================================================================
 training:
   # Configuration for train-validation-test split
   split_config:
     test_size: 0.15
     validation_size: 0.15
     time_aware_split: true
-    stratify_by: ['Year']
-  
+    stratify_by: ["Year"]
+
   # Configuration for cross-validation
   cv_config:
     cv_folds: 5
-    cv_strategy: 'time_series' # 'time_series' or 'stratified'
-    cv_group_by: 'Year'
-  
+    cv_strategy: "time_series" # 'time_series' or 'stratified'
+    cv_group_by: "Year"
+    purged: true
+    purge_events: 1
+    embargo_events: 1
+
   # Configuration for model training process
   training_config:
     early_stopping_rounds: 100
-    early_stopping_metric: 'mae'
+    early_stopping_metric: "mae"
 
-# ============================================================================
-# HYPERPARAMETER OPTIMIZATION (OPTUNA)
-# ============================================================================
+  # Parallelization controls
+  parallel:
+    # n_jobs per fold to train base algorithms concurrently (-1 uses all cores)
+    n_jobs_per_fold: -1
+    # Whether to cap estimator-level threads when doing outer parallelism
+    limit_estimator_threads: true
+    estimator_n_jobs: 1
+
 hyperparameter_optimization:
   enabled: true
-  n_trials: 100
+  n_trials: 300
   timeout_hours: 2
-  optimization_metric: 'mae'
-  optimization_direction: 'minimize'
-  
+  objective_metric: "spearman"  # options: mae, spearman
+  optimization_direction: "minimize"
+  seed: 42
+  storage: null  # e.g., sqlite:///optuna.db
+  n_jobs: 1  # parallelize trials per study; increase carefully to avoid oversubscription
+
   # Search spaces for hyperparameters
   param_search_spaces:
     lightgbm:
@@ -170,29 +357,57 @@ hyperparameter_optimization:
       learning_rate: [0.01, 0.05]
       max_depth: [7, 15]
 
-# ============================================================================
-# PREDICTION WORKFLOW CONFIGURATION
-# ============================================================================
 prediction:
   # Confidence thresholds for categorizing predictions
   confidence_thresholds:
     high: 0.80
     medium: 0.60
     low: 0.40
-  
+  calibration:
+    uncertainty_method: "quantile"  # options: quantile, rank_residual_std
+    use_quantile_models: true
+    lower_quantile: 0.1
+    upper_quantile: 0.9
+    confidence_band_delta: 1.5 # fallback for std-based bands
+  top_k_thresholds: [3, 10]
+
   # Default values for features if they are missing during prediction
   imputation_defaults:
     Grid_Pos: 15.0
     Quali_Pos: 15.0
     Weather_Temp: 25.0
 
-# ============================================================================
-# EVALUATION CONFIGURATION
-# ============================================================================
 evaluation:
   # Metrics to calculate for evaluating model performance
-  metrics: ['mae', 'rmse', 'r2', 'spearman_correlation', 'top3_accuracy', 'top5_accuracy']
+  metrics:
+    [
+      "mae",
+      "rmse",
+      "r2",
+      "spearman_correlation",
+      "top3_accuracy",
+      "top5_accuracy",
+    ]
   # Hold out one or more recent years for final testing
   holdout_years: [2024]
   # Number of iterations for bootstrap confidence intervals
-  bootstrap_iterations: 1000 
+  bootstrap_iterations: 1000
+  # Rank metrics configuration
+  rank_metrics:
+    k_list: [3, 5, 10]
+  # Calibration diagnostics
+  calibration:
+    n_bins: 10
+    store_plots: true
+  # Drift tracking thresholds
+  drift:
+    rolling_window_events: 6
+    threshold_mae: 0.5
+    threshold_spearman: 0.15
+
+reliability:
+  enable: true
+  dnf_position: 20
+  dnf_position_by_circuit: {}
+  calibration:
+    method: isotonic  # isotonic or sigmoid
