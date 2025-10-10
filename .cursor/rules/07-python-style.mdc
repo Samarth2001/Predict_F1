@@ -1,0 +1,89 @@
+---
+globs: *.py
+description: Python coding standards and style guide
+---
+
+# Python Style Guide
+
+## Code Style
+- Follow PEP 8 conventions
+- Use type hints for function signatures
+- Maximum line length: 100 characters
+- Use descriptive variable names (no single letters except loop counters)
+
+## Function Design
+- Keep functions under 50 lines when possible
+- Single responsibility principle
+- Clear docstrings with parameters and return types
+- Return early to reduce nesting
+
+## Imports
+```python
+# Standard library
+import os
+import sys
+from typing import List, Dict, Optional
+
+# Third-party
+import pandas as pd
+import numpy as np
+
+# Local
+from f1_predictor.config import CONFIG
+from f1_predictor.utils import helper_function
+```
+
+## Error Handling
+```python
+try:
+    risky_operation()
+except SpecificException as e:
+    logger.error(f"Operation failed: {e}")
+    raise
+```
+
+## Logging
+```python
+import logging
+logger = logging.getLogger(__name__)
+
+logger.debug("Detailed information")
+logger.info("General information")
+logger.warning("Warning message")
+logger.error("Error message")
+```
+
+## Type Hints
+```python
+def process_data(
+    df: pd.DataFrame,
+    year: int,
+    options: Optional[Dict[str, Any]] = None
+) -> pd.DataFrame:
+    """Process race data for analysis."""
+    pass
+```
+
+## Docstrings
+```python
+def calculate_metrics(predictions: np.ndarray, actuals: np.ndarray) -> Dict[str, float]:
+    """
+    Calculate evaluation metrics.
+    
+    Args:
+        predictions: Array of predicted positions
+        actuals: Array of actual positions
+        
+    Returns:
+        Dictionary containing metric names and values
+    """
+    pass
+```
+
+## Best Practices
+- Use list comprehensions for simple transformations
+- Prefer f-strings for formatting
+- Use context managers (`with`) for file operations
+- Avoid mutable default arguments
+- Use constants for magic numbers
+- Keep classes focused and cohesive

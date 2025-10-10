@@ -11,8 +11,8 @@ class TestPredictionWorkflow(unittest.TestCase):
     """
 
     def setUp(self):
-        """Set up the path to the prediction script."""
-        self.predictor_script = 'predict.py'
+        """Set up the path to the prediction script under scripts/."""
+        self.predictor_script = os.path.join('scripts', 'predict.py')
         if not os.path.exists(self.predictor_script):
             self.fail(f"Predictor script not found at: {self.predictor_script}")
 
@@ -31,7 +31,8 @@ class TestPredictionWorkflow(unittest.TestCase):
             )
             
                                                         
-            self.assertIn('usage: predict.py', result.stdout)
+            # Help message should display usage; avoid hard-coding script path text
+            self.assertIn('usage:', result.stdout)
             self.assertIn('F1 Prediction System - Unified Workflow', result.stdout)
             self.assertIn('Available commands', result.stdout)
             self.assertIn('{fetch-data,train,predict}', result.stdout)

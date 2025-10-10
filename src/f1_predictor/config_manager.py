@@ -58,14 +58,15 @@ def _expand_env_vars_in_config(cfg: Any) -> Any:
 class ConfigManager:
     """Centralized configuration loader with local.yaml overlay and env var interpolation.
 
-    - Loads `config/default_config.yaml` as the single source of truth for tunables
-    - Optionally overlays `config/local.yaml` (gitignored) for secrets/overrides
+    - Loads `configs/default.yaml` as the single source of truth for tunables
+    - Optionally overlays `configs/local.yaml` (gitignored) for secrets/overrides
     - Supports environment variable expansion in YAML values via ${VAR} or ${VAR:-default}
     - Provides a stable hash of the merged (pre-resolved) configuration for metadata versioning
     """
 
-    def __init__(self, config_path: str = "config/default_config.yaml", local_config_path: str = "config/local.yaml"):
-        self.base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    def __init__(self, config_path: str = "configs/default.yaml", local_config_path: str = "configs/local.yaml"):
+        # Base directory should point to repository root when using src/ layout
+        self.base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         self._default_config_path = os.path.join(self.base_dir, config_path)
         self._local_config_path = os.path.join(self.base_dir, local_config_path)
 

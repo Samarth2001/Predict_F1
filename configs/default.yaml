@@ -23,19 +23,19 @@ general:
     estimator_n_jobs: 1
 
 paths:
-  data_dir: "f1_data_real"
-  cache_dir: "f1_data_real/ff1_cache"
-  features_cache_dir: "f1_data_real/features_cache"
-  models_dir: "models"
+  data_dir: "data/raw"
+  cache_dir: "data/cache/ff1_cache"
+  features_cache_dir: "data/cache/features_cache"
+  models_dir: "artifacts/models"
   logs_dir: "logs"
-  predictions_dir: "predictions"
-  evaluation_dir: "evaluation"
-  visualizations_dir: "visualizations"
-  reports_dir: "reports"
-  races_csv: "f1_data_real/all_races_data.csv"
-  quali_csv: "f1_data_real/all_quali_data.csv"
-  weather_csv: "f1_data_real/weather_data.csv"
-  ingestion_state: "f1_data_real/ingestion_state.json"
+  predictions_dir: "artifacts/predictions"
+  evaluation_dir: "artifacts/evaluation"
+  visualizations_dir: "artifacts/visualizations"
+  reports_dir: "artifacts/reports"
+  races_csv: "data/raw/all_races_data.csv"
+  quali_csv: "data/raw/all_quali_data.csv"
+  weather_csv: "data/raw/weather_data.csv"
+  ingestion_state: "data/raw/ingestion_state.json"
   log_file_prefix: "f1_predictor"
 data_collection:
   start_year: 2018
