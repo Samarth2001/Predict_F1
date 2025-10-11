@@ -1,0 +1,50 @@
+---
+alwaysApply: true
+description: Security and best practices guidelines
+---
+
+# Security & Best Practices
+
+## API Keys & Secrets
+- **NEVER** hardcode API keys in source code
+- Use environment variables for sensitive data
+- Add sensitive files to `.gitignore`
+- Use configuration files (excluded from git) for secrets
+
+## Example Pattern
+```python
+import os
+from typing import Optional
+
+def get_api_key() -> Optional[str]:
+    """Retrieve API key from environment."""
+    return os.environ.get('F1_API_KEY')
+```
+
+## Configuration Security
+- Provide example config files: `local.yaml.example`
+- Never commit actual config with secrets: `local.yaml` in `.gitignore`
+- Document required environment variables in [README.md](mdc:README.md)
+
+## Code Quality
+- Follow modular structure and separation of concerns
+- Use proper error handling and logging
+- Validate inputs at module boundaries
+- Write defensive code with type checking
+
+## Dependencies
+- Pin versions in [requirements.txt](mdc:requirements.txt)
+- Regularly update dependencies for security patches
+- Avoid unnecessary third-party libraries
+- Audit dependencies for vulnerabilities
+
+## Data Privacy
+- No personal data in logs or outputs
+- Sanitize user inputs
+- Validate data sources
+
+## Git Hygiene
+- Review changes before committing
+- Use meaningful commit messages
+- Never commit large binary files
+- Keep sensitive data out of version control

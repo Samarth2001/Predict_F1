@@ -1,0 +1,58 @@
+---
+alwaysApply: true
+description: Data management and artifact conventions
+---
+
+# Data & Artifacts Conventions
+
+## Directory Structure
+
+### Source Data
+- **`f1_data_real/`** - Raw and cached FastF1 data
+  - `all_races_data.csv` - Historical race data
+  - `all_quali_data.csv` - Historical qualifying data
+  - `ff1_cache/` - FastF1 API cache
+  - `features_cache/` - Computed features cache
+
+### Models & Outputs
+- **`models/`** - Serialized model artifacts (.pkl files)
+- **`predictions/`** - Prediction outputs (CSV, JSON)
+- **`evaluation/`** - Evaluation results and reports
+- **`validation/`** - Validation analysis
+- **`reports/`** - Generated reports
+- **`visualizations/`** - Charts and graphs
+- **`logs/`** - Application logs
+
+## File Naming Conventions
+
+### Models
+```
+{prediction_type}_model.pkl          # Model file
+{prediction_type}_model.metadata.json # Model metadata
+```
+
+### Predictions
+```
+predictions_{circuit}_{year}.csv
+predictions_{circuit}_{year}_{timestamp}.json
+```
+
+### Reports
+```
+evaluation_report_{timestamp}.txt
+evaluation_data_{timestamp}.json
+reliability_{timestamp}.json
+```
+
+## Data Formats
+- **CSV/Parquet**: Tabular data (preferred for data interchange)
+- **Pickle**: Model artifacts only (not for data)
+- **JSON**: Metadata, configuration, small datasets
+- **Logs**: Plain text with timestamps
+
+## Best Practices
+- **Informative names**: Include season, round, circuit in filenames
+- **Timestamps**: Use `YYYYMMDD_HHMMSS` format for uniqueness
+- **No large commits**: Never commit large generated artifacts
+- **Cache management**: Regularly clean old cache files
+- **Data validation**: Validate data integrity before processing

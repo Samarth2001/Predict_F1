@@ -1,0 +1,58 @@
+---
+alwaysApply: true
+description: Machine learning pipeline flow and module ownership
+---
+
+# ML Pipeline & Workflow
+
+## Pipeline Flow
+```
+FastF1 API 
+  → [data_loader.py](mdc:f1_predictor/data_loader.py) 
+  → Raw Data
+  → [feature_engineering_pipeline.py](mdc:f1_predictor/feature_engineering_pipeline.py)
+  → Engineered Features
+  → [model_training.py](mdc:f1_predictor/model_training.py)
+  → Trained Models
+  → [prediction.py](mdc:f1_predictor/prediction.py)
+  → Predictions
+  → [evaluation.py](mdc:f1_predictor/evaluation.py)
+  → Metrics & Reports
+```
+
+## Feature Engineering
+**Location**: [feature_engineering_pipeline.py](mdc:f1_predictor/feature_engineering_pipeline.py), [prediction_features.py](mdc:f1_predictor/prediction_features.py)
+
+**Categories**:
+- Driver/team performance (form, consistency, win rates)
+- Circuit characteristics (track type, weather, overtaking difficulty)
+- Contextual features (championship pressure, season progress)
+- Rolling windows (short/medium/long term performance)
+
+## Model Training
+**Location**: [model_training.py](mdc:f1_predictor/model_training.py)
+
+**Models**: LightGBM, XGBoost, Random Forest, Neural Network
+**Ensemble**: Weighted combination with auto-optimized weights
+**Features**: Hyperparameter optimization (Optuna), feature selection, stacking
+
+## Predictions
+**Location**: [prediction.py](mdc:f1_predictor/prediction.py)
+
+**Scenarios**:
+- Pre-qualifying race predictions
+- Post-qualifying race predictions
+- Confidence scoring (High/Medium/Low)
+- Live updates during race weekends
+
+## Evaluation
+**Location**: [evaluation.py](mdc:f1_predictor/evaluation.py)
+
+**Metrics**: Time-aware splits, MAE, Top-3/5/10 accuracy, podium precision, rank correlation
+
+## Where to Make Changes
+- **New training features** → [feature_engineering_pipeline.py](mdc:f1_predictor/feature_engineering_pipeline.py)
+- **Prediction-time inputs** → [prediction_features.py](mdc:f1_predictor/prediction_features.py)
+- **Model architecture** → [model_training.py](mdc:f1_predictor/model_training.py)
+- **Evaluation metrics** → [evaluation.py](mdc:f1_predictor/evaluation.py)
+- **Prediction logic** → [prediction.py](mdc:f1_predictor/prediction.py)

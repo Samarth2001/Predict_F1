@@ -1,0 +1,60 @@
+---
+alwaysApply: true
+description: Technical architecture and design patterns
+---
+
+# Technical Architecture
+
+## Design Patterns
+
+### Modular Pipeline
+Each stage is isolated in separate modules:
+- Data loading → [data_loader.py](mdc:f1_predictor/data_loader.py)
+- Feature engineering → [feature_engineering_pipeline.py](mdc:f1_predictor/feature_engineering_pipeline.py)
+- Model training → [model_training.py](mdc:f1_predictor/model_training.py)
+- Prediction → [prediction.py](mdc:f1_predictor/prediction.py)
+- Evaluation → [evaluation.py](mdc:f1_predictor/evaluation.py)
+
+### Configuration-Driven
+All behavior controlled through [config.py](mdc:f1_predictor/config.py) and [default_config.yaml](mdc:config/default_config.yaml).
+
+### Time-Aware Processing
+Proper temporal data handling prevents data leakage:
+- Train/test splits respect time ordering
+- Features use only past information
+- Evaluation uses time-based validation
+
+### Ensemble Learning
+Multiple algorithms combined with optimized weights:
+- LightGBM (gradient boosting)
+- XGBoost (extreme gradient boosting)
+- Random Forest (bagging)
+- Neural Network (deep learning)
+
+## Performance Optimization
+
+### Speed
+- Parallel processing for feature engineering
+- Aggressive caching of expensive computations
+- Optimized pandas data types
+- Efficient memory management
+
+### Accuracy
+- Domain-specific feature engineering
+- Hyperparameter optimization (Optuna)
+- Ensemble methods
+- Comprehensive data cleaning
+
+## Error Handling
+- Graceful failure recovery
+- Comprehensive logging
+- Data validation at pipeline boundaries
+- Model diagnostics and debugging
+
+## Testing Strategy
+- System tests: [test_system.py](mdc:test_system.py)
+- Validation: [validate_predictions.py](mdc:validate_predictions.py)
+- F1-specific metrics in [evaluation.py](mdc:f1_predictor/evaluation.py)
+
+## Dependencies
+See [requirements.txt](mdc:requirements.txt) for all dependencies with pinned versions.

@@ -1,0 +1,7 @@
+---
+description: Apply when using claude/Sonnet models
+alwaysApply: false
+---
+- never create markdown (`.md`) files after you're done. NEVER!
+- never use emojis in your replies
+- i know i'm absolutely right. no need to mention it

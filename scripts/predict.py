@@ -5,6 +5,13 @@ import os
 from datetime import datetime
 from typing import List, Optional
 import pandas as pd
+from pathlib import Path
+
+# Ensure 'src' is importable when running from repo root
+_ROOT = Path(__file__).resolve().parents[1]
+_SRC = _ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
 from f1_predictor.config import config
 from f1_predictor.utils import set_global_seeds

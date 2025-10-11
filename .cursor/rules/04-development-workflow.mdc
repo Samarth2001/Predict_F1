@@ -1,0 +1,60 @@
+---
+alwaysApply: true
+description: Development workflows and how to run the system
+---
+
+# Development Workflows
+
+## Running the System
+
+### Make Predictions
+```bash
+python predict.py
+```
+Primary prediction script. Generates qualifying and race predictions.
+
+### System Testing
+```bash
+python test_system.py
+```
+Comprehensive system validation and testing.
+
+### Model Improvement
+```bash
+python improve_model.py
+```
+Workflow for model evaluation and improvement.
+
+### Validation
+```bash
+python validate_predictions.py
+```
+Validate prediction accuracy against actual results.
+
+## Development Tasks
+
+### Adding New Features
+1. Update [feature_engineering_pipeline.py](mdc:f1_predictor/feature_engineering_pipeline.py)
+2. Modify [config.py](mdc:f1_predictor/config.py) if needed
+3. Test with [test_system.py](mdc:test_system.py)
+4. Validate with [validate_predictions.py](mdc:validate_predictions.py)
+
+### Model Improvements
+1. Adjust hyperparameters in [config.py](mdc:f1_predictor/config.py)
+2. Modify ensemble weights in [model_training.py](mdc:f1_predictor/model_training.py)
+3. Update evaluation metrics in [evaluation.py](mdc:f1_predictor/evaluation.py)
+4. Run improvement workflow: [improve_model.py](mdc:improve_model.py)
+
+### Prediction Enhancements
+1. Update logic in [prediction.py](mdc:f1_predictor/prediction.py)
+2. Modify confidence scoring
+3. Enhance live update capabilities
+4. Test end-to-end with [predict.py](mdc:predict.py)
+
+## CLI Arguments
+Check each script's `if __name__ == "__main__"` section for supported arguments. Document new options in [README.md](mdc:README.md).
+
+## Debugging
+- **Logs**: Check `logs/f1_predictions.log`
+- **Verbose mode**: Enable detailed logging in [config.py](mdc:f1_predictor/config.py)
+- **Data validation**: Use [test_system.py](mdc:test_system.py)
