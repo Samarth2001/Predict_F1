@@ -23,7 +23,8 @@ general:
     estimator_n_jobs: 1
 
 paths:
-  data_dir: "data/raw"
+  data_dir: "data"
+  db_path: "data/f1.duckdb"
   cache_dir: "data/cache/ff1_cache"
   features_cache_dir: "data/cache/features_cache"
   models_dir: "artifacts/models"
@@ -32,10 +33,6 @@ paths:
   evaluation_dir: "artifacts/evaluation"
   visualizations_dir: "artifacts/visualizations"
   reports_dir: "artifacts/reports"
-  races_csv: "data/raw/all_races_data.csv"
-  quali_csv: "data/raw/all_quali_data.csv"
-  weather_csv: "data/raw/weather_data.csv"
-  ingestion_state: "data/raw/ingestion_state.json"
   log_file_prefix: "f1_predictor"
 data_collection:
   start_year: 2018
