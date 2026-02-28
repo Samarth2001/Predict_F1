@@ -377,10 +377,70 @@ class InteractionFeaturesEngineer(BaseFeatureEngineer):
         return self.df
 
 
+class QualiTimeEngineer(BaseFeatureEngineer):
+    """Convert Q1/Q2/Q3 lap-time strings to seconds and compute pole-gap features."""
+
+    @staticmethod
+    def _to_seconds(series: pd.Series) -> pd.Series:
+        """Parse timedelta-like strings to float seconds; returns NaN on failure."""
+        def _parse(val):
+            if pd.isna(val):
+                return np.nan
+            try:
+                td = pd.to_timedelta(str(val), errors="coerce")
+                return td.total_seconds() if not pd.isna(td) else np.nan
+            except Exception:
+                return np.nan
+        return series.map(_parse)
+
+    def engineer_features(self) -> pd.DataFrame:
+        logger.info("Engineering qualifying time features...")
+        q_cols = [c for c in ["Q1", "Q2", "Q3"] if c in self.df.columns]
+        if not q_cols:
+            return self.df
+
+        for col in q_cols:
+            self.df[f"{col}_s"] = self._to_seconds(self.df[col])
+
+        # Best lap time available (Q3 > Q2 > Q1 priority)
+        time_cols = [f"{c}_s" for c in ["Q3", "Q2", "Q1"] if f"{c}_s" in self.df.columns]
+        self.df["Quali_Time_s"] = self.df[time_cols].bfill(axis=1).iloc[:, 0]
+
+        # Gap to pole (fastest in that event)
+        if "Quali_Time_s" in self.df.columns and {"Year", "Race_Num"}.issubset(self.df.columns):
+            event_best = self.df.groupby(["Year", "Race_Num"])["Quali_Time_s"].transform("min")
+            self.df["Quali_Gap_To_Pole"] = self.df["Quali_Time_s"] - event_best
+            # Percentage gap (avoid division by zero)
+            self.df["Quali_Gap_Pct"] = self.df["Quali_Gap_To_Pole"] / event_best.replace(0, np.nan)
+
+        return self.df
+
+
+class ChampionshipFeatureEngineer(BaseFeatureEngineer):
+    """Cumulative championship points up to (but not including) the current race."""
+
+    def engineer_features(self) -> pd.DataFrame:
+        logger.info("Engineering championship standing features...")
+        if "Points" not in self.df.columns:
+            return self.df
+
+        self.df.sort_values(["Year", "Race_Num"], inplace=True)
+
+        for entity in ["Driver", "Team"]:
+            if entity not in self.df.columns:
+                continue
+            # Season-cumulative points shifted by 1 to avoid leakage
+            self.df[f"{entity}_Season_Points"] = (
+                self.df.groupby(["Year", entity])["Points"]
+                .apply(lambda s: s.shift(1).cumsum())
+                .reset_index(level=[0, 1], drop=True)
+                .fillna(0)
+            )
+        return self.df
+
+
 class FeatureOptimizer(BaseFeatureEngineer):
     def engineer_features(self) -> pd.DataFrame:
-                                                                        
-                                                                         
         logger.info(
             "Skipping global imputation to prevent leakage; deferring to train-time."
         )
@@ -407,13 +467,16 @@ class FeatureEngineeringPipeline:
             "TimeDecayEngineer": TimeDecayEngineer,
             "CircuitTypeEngineer": CircuitTypeEngineer,
             "CircuitAggregatesEngineer": CircuitAggregatesEngineer,
-            "TeammateFeaturesEngineer": TeammateFeaturesEngineer,
-            "SprintFeatureEngineer": SprintFeatureEngineer,
-            "WeatherFeatureEngineer": WeatherFeatureEngineer,
             "SeasonProgressEngineer": SeasonProgressEngineer,
             "ClusterPerformanceEngineer": ClusterPerformanceEngineer,
+            "TeammateFeaturesEngineer": TeammateFeaturesEngineer,
+            "SprintFeatureEngineer": SprintFeatureEngineer,
             "QualiDeltaEngineer": QualiDeltaEngineer,
+            "QualiTimeEngineer": QualiTimeEngineer,
             "GridUpliftEngineer": GridUpliftEngineer,
+            "InteractionFeaturesEngineer": InteractionFeaturesEngineer,
+            "WeatherFeatureEngineer": WeatherFeatureEngineer,
+            "ChampionshipFeatureEngineer": ChampionshipFeatureEngineer,
             "FeatureOptimizer": FeatureOptimizer,
         }
 
@@ -456,7 +519,8 @@ class FeatureEngineeringPipeline:
             else:
                 quali_df["Quali_Pos"] = np.nan
                                                       
-        quali_to_merge = quali_df[["Year", "Race_Num", "Driver", "Quali_Pos"]].copy()
+        q_time_cols = [c for c in ["Q1", "Q2", "Q3"] if c in quali_df.columns]
+        quali_to_merge = quali_df[["Year", "Race_Num", "Driver", "Quali_Pos"] + q_time_cols].copy()
         quali_to_merge.sort_values(["Year", "Race_Num"], inplace=True)
         quali_to_merge.drop_duplicates(
             ["Year", "Race_Num", "Driver"], keep="last", inplace=True

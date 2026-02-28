@@ -1,24 +1,21 @@
-"""F1DataCollector: fetches race and qualifying data from FastF1 and persists to CSV."""
+"""F1DataCollector: fetches race and qualifying data from FastF1 and persists via F1Store."""
 
-import fastf1
-import hashlib
-import json
 import logging
 import os
 import time
-from contextlib import suppress
-from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
+import fastf1
 import numpy as np
 import pandas as pd
 
 from .config import config
+from .store import F1Store
 from .utils import set_global_seeds
 
 # Initialise FastF1 cache once at import time
 try:
-    fastf1.Cache.enable_cache(config.get("paths.cache_dir"))
+    fastf1.Cache.enable_cache(config.get("paths.cache_dir", "data/cache/ff1_cache"))
 except Exception as exc:
     logging.getLogger(__name__).warning(f"FastF1 cache init failed: {exc}")
 
@@ -33,7 +30,7 @@ try:
     import requests_cache as _requests_cache
 
     _ttl_hours = int(config.get("data_collection.external_apis.openweather_cache_ttl_hours", 12))
-    _cache_dir = config.get("paths.cache_dir")
+    _cache_dir = config.get("paths.cache_dir", "data/cache/ff1_cache")
     os.makedirs(_cache_dir, exist_ok=True)
     _requests_cache.install_cache(
         cache_name=os.path.join(_cache_dir, "http_cache"),
@@ -49,119 +46,70 @@ logger = logging.getLogger(__name__)
 
 
 class F1DataCollector:
-    """Fetches race and qualifying results from FastF1 and appends them to CSVs.
+    """Fetches race and qualifying results from FastF1 and stores them via F1Store.
 
     Supports incremental fetching: already-processed events are skipped unless
-    ``force_refresh=True``.  An ingestion state JSON (with MD5 checksums) guards
-    against partial writes.
+    ``force_refresh=True``.  The ingestion log in the DB guards against partial writes.
     """
 
-    def __init__(self):
-        self.existing_events: Set[tuple] = set()
-        self.ingestion_state_path: str = config.get("paths.ingestion_state")
-        self._load_existing_data_for_resume()
-
-    # ------------------------------------------------------------------
-    # Resume / state helpers
-    # ------------------------------------------------------------------
-
-    def _load_existing_data_for_resume(self):
-        races_csv_path = config.get("paths.races_csv")
-        try:
-            df = pd.read_csv(races_csv_path, usecols=["Year", "Race_Num"])
-            for row in df.itertuples(index=False):
-                self.existing_events.add((int(row.Year), int(row.Race_Num)))
-            logger.info(f"Loaded {len(self.existing_events)} existing event records.")
-        except FileNotFoundError:
-            logger.info("No existing race data found. Starting fresh.")
-        except Exception as e:
-            logger.warning(f"Could not load existing races CSV: {e}")
-
-        try:
-            if self.ingestion_state_path and os.path.exists(self.ingestion_state_path):
-                with open(self.ingestion_state_path, "r", encoding="utf-8") as f:
-                    state = json.load(f)
-                processed = state.get("processed", [])
-                try:
-                    races_full = pd.read_csv(races_csv_path)
-                except Exception:
-                    races_full = pd.DataFrame()
-                for item in processed:
-                    y = int(item.get("Year"))
-                    r = int(item.get("Race_Num"))
-                    checksum = item.get("checksum")
-                    ok = False
-                    if not races_full.empty:
-                        event_rows = races_full[
-                            (races_full["Year"] == y) & (races_full["Race_Num"] == r)
-                        ]
-                        if not event_rows.empty:
-                            subset = event_rows.sort_values(["Year", "Race_Num", "Driver"]).astype(str)
-                            payload = subset[
-                                [
-                                    c
-                                    for c in ["Year", "Race_Num", "Driver", "Team", "Position", "Grid"]
-                                    if c in subset.columns
-                                ]
-                            ].to_csv(index=False)
-                            hasher = hashlib.md5(payload.encode("utf-8")).hexdigest()
-                            ok = hasher == checksum
-                    if ok:
-                        self.existing_events.add((y, r))
-                    else:
-                        self.existing_events.discard((y, r))
-        except Exception as e:
-            logger.warning(f"Failed to load ingestion state: {e}")
+    def __init__(self, store: Optional[F1Store] = None):
+        self._store = store  # injected or opened per-run
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def fetch_all_f1_data(
-        self, start_year: int = None, end_year: int = None, force_refresh: bool = False
+        self,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+        force_refresh: bool = False,
     ) -> bool:
         start_year = start_year or config.get("data_collection.start_year")
         end_year = end_year or config.get("data_collection.end_year")
-        logger.info(
-            f"Starting data collection from {start_year} to {end_year}. Force refresh: {force_refresh}"
-        )
+        logger.info(f"Starting data collection {start_year}–{end_year}. Force refresh: {force_refresh}")
 
-        if force_refresh:
-            self.existing_events = set()
-            for path in [config.get("paths.races_csv"), config.get("paths.quali_csv")]:
-                if os.path.exists(path):
-                    os.remove(path)
-            if self.ingestion_state_path and os.path.exists(self.ingestion_state_path):
-                try:
-                    os.remove(self.ingestion_state_path)
-                except Exception as e:
-                    logger.warning(f"Could not remove ingestion state file: {e}")
+        with F1Store() as store:
+            if force_refresh:
+                logger.info("Force refresh: clearing existing data.")
+                store.con.execute("DELETE FROM races")
+                store.con.execute("DELETE FROM qualifying")
+                store.con.execute("DELETE FROM ingestion_log")
 
-        self._load_existing_data_for_resume()
+            existing_events: Set[tuple] = store.processed_events()
+            logger.info(f"Resuming — {len(existing_events)} events already processed.")
 
-        try:
-            for year in range(start_year, end_year + 1):
-                logger.info(f"Collecting data for {year} season...")
-                self._fetch_season_data(year, force_refresh)
-                time.sleep(1)
-            logger.info("Data collection completed successfully.")
-            return True
-        except Exception as e:
-            logger.error(f"Data collection failed: {e}", exc_info=True)
-            return False
+            try:
+                for year in range(start_year, end_year + 1):
+                    logger.info(f"Collecting data for {year} season…")
+                    self._fetch_season_data(year, store, existing_events, force_refresh)
+                    time.sleep(1)
+                logger.info("Data collection completed successfully.")
+                return True
+            except Exception as exc:
+                logger.error(f"Data collection failed: {exc}", exc_info=True)
+                return False
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _fetch_season_data(self, year: int, force_refresh: bool = False):
+    def _fetch_season_data(
+        self,
+        year: int,
+        store: F1Store,
+        existing_events: Set[tuple],
+        force_refresh: bool,
+    ) -> None:
         schedule = fastf1.get_event_schedule(year, include_testing=False)
         if schedule.empty:
             logger.warning(f"No schedule found for {year}.")
             return
 
+        now_utc_naive = pd.Timestamp.utcnow().tz_localize(None)
+
         for _, event in schedule.sort_values("RoundNumber").iterrows():
-            round_num = event["RoundNumber"]
+            round_num = int(event["RoundNumber"])
 
             # Skip future events
             event_dt = pd.to_datetime(event["EventDate"], errors="coerce")
@@ -177,34 +125,38 @@ class F1DataCollector:
                         )
                     except Exception:
                         pass
-                with suppress(Exception):
+                try:
                     event_dt = event_dt.tz_localize(None)
-            now_utc_naive = pd.Timestamp.utcnow().tz_localize(None)
+                except Exception:
+                    pass
+
             if (
                 isinstance(event_dt, pd.Timestamp)
                 and pd.notna(event_dt)
                 and event_dt > now_utc_naive
             ):
                 logger.info(
-                    f"Stopping data collection for {year}: event '{event['EventName']}' is in the future."
+                    f"Stopping {year}: '{event['EventName']}' is in the future."
                 )
                 break
 
-            if round_num == 0 or (
-                not force_refresh and (year, round_num) in self.existing_events
-            ):
+            if round_num == 0 or (not force_refresh and (year, round_num) in existing_events):
                 continue
 
-            logger.info(f"Processing {year} Round {round_num}: {event['EventName']}")
+            logger.info(f"Processing {year} R{round_num}: {event['EventName']}")
+
             race_df = self._fetch_session_with_retry(year, round_num, "R", event)
             if not race_df.empty:
-                self._append_and_save(race_df, config.get("paths.races_csv"))
-                self._update_ingestion_state(year, round_num, race_df)
+                race_df = self._apply_canonicalization(race_df)
+                store.upsert_races(race_df)
+                store.mark_processed(year, round_num, "R", race_df)
+                existing_events.add((year, round_num))
 
             quali_df = self._fetch_session_with_retry(year, round_num, "Q", event)
             if not quali_df.empty:
-                self._append_and_save(quali_df, config.get("paths.quali_csv"))
-                self._update_ingestion_state(year, round_num, quali_df)
+                quali_df = self._apply_canonicalization(quali_df)
+                store.upsert_qualifying(quali_df)
+                store.mark_processed(year, round_num, "Q", quali_df)
 
             time.sleep(config.get("data_collection.fastf1.fetch_delay", 1.5))
 
@@ -221,40 +173,38 @@ class F1DataCollector:
                     return self._extract_race_data(session, event)
                 elif session_code == "Q":
                     return self._extract_qualifying_data(session, event)
-            except Exception as e:
-                logger.error(
-                    f"Failed to load {session_code} for {year} Round {round_num}: {e}"
-                )
+            except Exception as exc:
+                logger.error(f"Failed to load {session_code} {year} R{round_num}: {exc}")
                 if attempt < max_retries - 1:
-                    time.sleep(base_delay * (2 ** attempt))
+                    time.sleep(base_delay * (2**attempt))
         return pd.DataFrame()
 
     def _extract_race_data(self, session: Any, event: pd.Series) -> pd.DataFrame:
         results = session.results
-        weather = session.weather_data
         if results.empty:
             return pd.DataFrame()
 
         try:
-            event_format = str(event.get("EventFormat", "")).lower()
-            is_sprint = 1 if "sprint" in event_format else 0
+            is_sprint = 1 if "sprint" in str(event.get("EventFormat", "")).lower() else 0
         except Exception:
             is_sprint = 0
 
-        avg_weather = weather.mean() if not weather.empty else {}
-        race_data = []
+        weather = session.weather_data
+        avg_weather: Dict = weather.mean(numeric_only=True).to_dict() if not weather.empty else {}
+
+        rows = []
         for _, result in results.iterrows():
-            race_data.append(
+            rows.append(
                 {
-                    "Year": event["EventDate"].year,
-                    "Race_Num": event["RoundNumber"],
+                    "Year": int(event["EventDate"].year),
+                    "Race_Num": int(event["RoundNumber"]),
                     "Circuit": str(event["EventName"]),
                     "Date": event["EventDate"].date(),
-                    "Driver": result.get("Abbreviation", "Unknown"),
-                    "Team": result.get("TeamName", "Unknown"),
+                    "Driver": str(result.get("Abbreviation", "Unknown")),
+                    "Team": str(result.get("TeamName", "Unknown")),
                     "Grid": result.get("GridPosition", np.nan),
                     "Position": result.get("Position", np.nan),
-                    "Status": result.get("Status", "Unknown"),
+                    "Status": str(result.get("Status", "Unknown")),
                     "Laps": result.get("Laps", np.nan),
                     "Points": result.get("Points", np.nan),
                     "AirTemp": avg_weather.get("AirTemp", np.nan),
@@ -265,7 +215,7 @@ class F1DataCollector:
                     "Is_Sprint": is_sprint,
                 }
             )
-        return pd.DataFrame(race_data)
+        return pd.DataFrame(rows)
 
     def _extract_qualifying_data(self, session: Any, event: pd.Series) -> pd.DataFrame:
         results = session.results
@@ -273,21 +223,20 @@ class F1DataCollector:
             return pd.DataFrame()
 
         try:
-            event_format = str(event.get("EventFormat", "")).lower()
-            is_sprint = 1 if "sprint" in event_format else 0
+            is_sprint = 1 if "sprint" in str(event.get("EventFormat", "")).lower() else 0
         except Exception:
             is_sprint = 0
 
-        quali_data = []
+        rows = []
         for _, result in results.iterrows():
-            quali_data.append(
+            rows.append(
                 {
-                    "Year": event["EventDate"].year,
-                    "Race_Num": event["RoundNumber"],
+                    "Year": int(event["EventDate"].year),
+                    "Race_Num": int(event["RoundNumber"]),
                     "Circuit": str(event["EventName"]),
                     "Date": event["EventDate"].date(),
-                    "Driver": result.get("Abbreviation", "Unknown"),
-                    "Team": result.get("TeamName", "Unknown"),
+                    "Driver": str(result.get("Abbreviation", "Unknown")),
+                    "Team": str(result.get("TeamName", "Unknown")),
                     "Position": result.get("Position", np.nan),
                     "Q1": result.get("Q1"),
                     "Q2": result.get("Q2"),
@@ -295,81 +244,7 @@ class F1DataCollector:
                     "Is_Sprint": is_sprint,
                 }
             )
-        return pd.DataFrame(quali_data)
-
-    def _append_and_save(self, new_data: pd.DataFrame, filepath: str):
-        if new_data.empty:
-            return
-
-        try:
-            existing = pd.read_csv(filepath)
-        except FileNotFoundError:
-            existing = pd.DataFrame()
-        except Exception as e:
-            logger.error(f"Error reading existing data from {filepath}: {e}")
-            existing = pd.DataFrame()
-
-        required_cols = ["Year", "Race_Num", "Driver", "Team", "Circuit", "Date"]
-        missing = [c for c in required_cols if c not in new_data.columns]
-        if missing:
-            logger.error(f"New data missing required columns: {missing}")
-            return
-
-        # Type coercions — log on failure instead of silently swallowing
-        for col, dtype_fn in [
-            ("Year", lambda s: pd.to_numeric(s, errors="coerce").astype("Int64")),
-            ("Race_Num", lambda s: pd.to_numeric(s, errors="coerce").astype("Int64")),
-            ("Date", lambda s: pd.to_datetime(s, errors="coerce", utc=True).dt.tz_localize(None)),
-            ("Driver", lambda s: s.astype(str)),
-            ("Team", lambda s: s.astype(str)),
-        ]:
-            if col in new_data.columns:
-                try:
-                    new_data[col] = dtype_fn(new_data[col])
-                except Exception as e:
-                    logger.warning(f"Type coercion failed for column '{col}': {e}")
-
-        new_data = self._apply_canonicalization(new_data)
-        combined = pd.concat([existing, new_data])
-        combined.drop_duplicates(subset=["Year", "Race_Num", "Driver"], keep="last", inplace=True)
-        combined.to_csv(filepath, index=False)
-
-    def _update_ingestion_state(self, year: int, round_num: int, df: pd.DataFrame) -> None:
-        """Persist a durable record of processed events with MD5 checksums."""
-        if not self.ingestion_state_path:
-            return
-        try:
-            os.makedirs(os.path.dirname(self.ingestion_state_path), exist_ok=True)
-            state: Dict[str, Any] = {"processed": []}
-            if os.path.exists(self.ingestion_state_path):
-                try:
-                    with open(self.ingestion_state_path, "r", encoding="utf-8") as f:
-                        state = json.load(f) or {"processed": []}
-                except Exception as e:
-                    logger.warning(f"Could not read existing ingestion state (resetting): {e}")
-                    state = {"processed": []}
-
-            subset = df.sort_values(["Year", "Race_Num", "Driver"]).astype(str)
-            payload = subset[
-                [c for c in subset.columns if c in ["Year", "Race_Num", "Driver", "Team", "Position", "Grid"]]
-            ].to_csv(index=False)
-            checksum = hashlib.md5(payload.encode("utf-8")).hexdigest()
-            entry = {
-                "Year": int(year),
-                "Race_Num": int(round_num),
-                "checksum": checksum,
-                "rows": int(df.shape[0]),
-            }
-            others = [
-                e
-                for e in state.get("processed", [])
-                if not (int(e.get("Year")) == year and int(e.get("Race_Num")) == round_num)
-            ]
-            state["processed"] = others + [entry]
-            with open(self.ingestion_state_path, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Failed to update ingestion state: {e}")
+        return pd.DataFrame(rows)
 
     def _apply_canonicalization(self, df: pd.DataFrame) -> pd.DataFrame:
         """Apply driver/team name mappings from config to normalise across seasons."""

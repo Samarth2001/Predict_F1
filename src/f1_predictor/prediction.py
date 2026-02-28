@@ -12,6 +12,7 @@ from .config import config
 from .data_loader import F1DataLoader
 from .feature_engineering_pipeline import FeatureEngineeringPipeline
 from .prediction_features import PredictionFeatureBuilder
+from .simulation import RaceSimulator, SimulationResult
 
 logger = logging.getLogger(__name__)
 
@@ -471,30 +472,79 @@ class F1Predictor:
         self,
         year: int,
         race_name: str,
-        session: str = "race",
+        mode: str = "auto",
+        n_simulations: int = 2000,
+        sc_probability: float = 0.3,
+        seed: Optional[int] = None,
         lineup_csv: Optional[str] = None,
-    ) -> Optional[pd.DataFrame]:
-        """Public entry for simulation-based predictions for future seasons.
+    ) -> Optional[SimulationResult]:
+        """Run Monte Carlo race simulation using the trained model predictions.
 
-        Uses aggregated historical stats and optional custom lineup CSV.
+        Parameters
+        ----------
+        year, race_name : int, str
+            Target event.
+        mode : str
+            Prediction mode passed to predict_race() ('auto', 'post_quali', etc.).
+        n_simulations : int
+            Number of race simulations to run (default 2 000).
+        sc_probability : float
+            Probability of a safety car in any given simulation (default 0.3).
+        seed : int | None
+            RNG seed; falls back to config general.random_seed.
+        lineup_csv : str | None
+            Optional path to a custom lineup CSV (Driver, Team columns).
+
+        Returns
+        -------
+        SimulationResult | None
         """
-        res = self._simulate_future_prediction(
-            year, race_name, session=session, lineup_csv=lineup_csv
-        )
-        if res is None:
+        if seed is None:
+            seed = int(config.get("general.random_seed", 42))
+
+        # Get point predictions from the race model
+        predictions = self.predict_race(year, race_name, mode=mode)
+        if predictions is None or predictions.empty:
+            logger.error(f"Cannot simulate: predict_race returned no predictions for {year} {race_name}.")
             return None
+
+        # Rename to standard column expected by RaceSimulator
+        if "Predicted_Race_Pos" not in predictions.columns and "Predicted_Pos" in predictions.columns:
+            predictions = predictions.rename(columns={"Predicted_Pos": "Predicted_Race_Pos"})
+
+        # Build per-driver DNF probs from model if available
+        dnf_probs: Optional[Dict[str, float]] = None
+        if self.dnf_model is not None:
+            try:
+                upcoming_df = self._get_upcoming_race_df(year, race_name)
+                if not upcoming_df.empty:
+                    features_df = self._prepare_features(upcoming_df)
+                    features_used = self._load_and_enforce_metadata("race", features_df)
+                    if features_used:
+                        X_dnf = features_df[features_used].select_dtypes(include=np.number)
+                        p_dnf_arr = self.dnf_model.predict_proba(X_dnf)[:, 1]
+                        dnf_probs = dict(zip(upcoming_df["Driver"].values, p_dnf_arr.tolist()))
+            except Exception as exc:
+                logger.warning(f"Could not compute per-driver DNF probs for simulation: {exc}")
+
+        simulator = RaceSimulator(n_simulations=n_simulations, seed=seed)
+        result = simulator.run(predictions, dnf_probs=dnf_probs, sc_probability=sc_probability)
+
+        # Persist summary
         try:
             self._save_prediction_results(
-                f"simulate_{session}",
+                "simulate_race",
                 year,
                 race_name,
-                res,
+                result.summary,
                 features_used=None,
-                scenario="simulate",
+                scenario=f"simulate_{mode}",
+                extra_meta={"n_simulations": n_simulations, "sc_probability": sc_probability},
             )
-        except Exception:
-            pass
-        return res
+        except Exception as exc:
+            logger.warning(f"Could not save simulation results: {exc}")
+
+        return result
 
     def _get_upcoming_race_df(self, year: int, race_name: str) -> pd.DataFrame:
         """Gets the DataFrame for the specified upcoming race."""
