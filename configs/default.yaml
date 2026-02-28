@@ -55,9 +55,7 @@ data_collection:
     # Sign up for a free key at https://openweathermap.org/
     # Supports env var expansion: ${OPENWEATHER_API_KEY} or ${OPENWEATHER_API_KEY:-fallback}
     openweathermap_api_key: "${OPENWEATHER_API_KEY:-}"
-    ergast_api_base_url: "http://ergast.com/api/f1"
-    rate_limit_per_minute: 60
-    # TTL for HTTP cache (OpenWeather etc.), in hours
+    # TTL for HTTP cache (OpenWeather), in hours
     openweather_cache_ttl_hours: 12
 
 feature_engineering:
