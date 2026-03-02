@@ -34,6 +34,13 @@ matplotlib==3.8.4
 seaborn==0.13.2
 plotly==5.22.0
 
+# REST API
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# Dashboard
+streamlit==1.36.0
+
 # Configuration Management
 pyyaml==6.0.2
 
