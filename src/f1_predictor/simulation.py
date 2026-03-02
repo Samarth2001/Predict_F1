@@ -173,11 +173,11 @@ class RaceSimulator:
     def _validate_inputs(predictions: pd.DataFrame, sc_probability: float) -> None:
         if not isinstance(predictions, pd.DataFrame):
             raise TypeError("predictions must be a pandas DataFrame")
+        if predictions.empty:
+            raise ValueError("predictions DataFrame is empty")
         missing = RaceSimulator._REQUIRED_COLS - set(predictions.columns)
         if missing:
             raise ValueError(f"predictions is missing required columns: {sorted(missing)}")
-        if predictions.empty:
-            raise ValueError("predictions DataFrame is empty")
         if not (0.0 <= sc_probability <= 1.0):
             raise ValueError(f"sc_probability must be in [0, 1], got {sc_probability}")
         if predictions["Predicted_Race_Pos"].isna().all():

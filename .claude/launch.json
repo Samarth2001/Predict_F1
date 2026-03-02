@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "MLflow UI",
-      "runtimeExecutable": "mlflow",
-      "runtimeArgs": ["ui", "--host", "0.0.0.0", "--port", "5000"],
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "mlflow", "ui", "--host", "0.0.0.0", "--port", "5000"],
       "port": 5000
     }
   ]
