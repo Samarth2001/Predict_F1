@@ -155,3 +155,9 @@ GEMINI.md
 score.py
 
 validation/
+# MLflow
+mlflow.db
+mlruns/
+
+# Claude local settings
+.claude/settings.local.json
