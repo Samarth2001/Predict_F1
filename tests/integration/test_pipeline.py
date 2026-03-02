@@ -1,11 +1,16 @@
 """Integration tests: full feature engineering pipeline + store round-trip."""
 
+import os
+import pathlib
 import numpy as np
 import pandas as pd
 import pytest
 
 from src.f1_predictor.feature_engineering_pipeline import FeatureEngineeringPipeline
 from src.f1_predictor.store import F1Store
+
+# Repository root — used for CLI smoke tests
+_REPO_ROOT = str(pathlib.Path(__file__).resolve().parents[2])
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +142,7 @@ class TestCLISmoke:
         result = subprocess.run(
             [sys.executable, "scripts/predict.py", "--help"],
             capture_output=True, text=True,
-            cwd="E:\\f1\\f1_prediction_project\\.claude\\worktrees\\naughty-easley",
+            cwd=_REPO_ROOT,
         )
         assert result.returncode == 0
         assert "F1 Prediction System" in result.stdout
@@ -150,7 +155,7 @@ class TestCLISmoke:
         result = subprocess.run(
             [sys.executable, "scripts/predict.py", "fetch-data", "--help"],
             capture_output=True, text=True,
-            cwd="E:\\f1\\f1_prediction_project\\.claude\\worktrees\\naughty-easley",
+            cwd=_REPO_ROOT,
         )
         assert result.returncode == 0
         assert "--force" in result.stdout
@@ -160,6 +165,6 @@ class TestCLISmoke:
         result = subprocess.run(
             [sys.executable, "scripts/predict.py", "train", "--help"],
             capture_output=True, text=True,
-            cwd="E:\\f1\\f1_prediction_project\\.claude\\worktrees\\naughty-easley",
+            cwd=_REPO_ROOT,
         )
         assert result.returncode == 0
