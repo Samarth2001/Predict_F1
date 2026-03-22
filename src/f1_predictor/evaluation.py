@@ -8,7 +8,7 @@ import json
 import os
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, brier_score_loss, log_loss
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -54,7 +54,7 @@ class F1ModelEvaluator:
             r2 = r2_score(y_test, y_pred)
             
             metrics = self._calculate_f1_specific_metrics(y_test, y_pred)
-
+            # Save per-event table for later reporting if possible
             try:
                 if isinstance(X_test, (pd.DataFrame,)) and {'Year', 'Race_Num'}.issubset(X_test.columns):
                     ev_agg, per_event_df = self._calculate_event_level_metrics(X_test, y_test, y_pred)
@@ -63,6 +63,8 @@ class F1ModelEvaluator:
             except Exception:
                 pass
 
+            # No-op: handled above to ensure metrics contain event-level aggregates once
+
             try:
                 rel = self._calibration_diagnostics(model, X_test, y_test, y_pred)
                 if rel:
@@ -70,6 +72,8 @@ class F1ModelEvaluator:
                     for k, v in summary.items():
                         metrics[f'calibration_{k}'] = float(v)
                     self.reliability_ = rel
+                prob_metrics = self._probability_metrics(model, X_test, y_test, y_pred)
+                metrics.update(prob_metrics)
             except Exception:
                 pass
 
@@ -131,18 +135,53 @@ class F1ModelEvaluator:
         
         return metrics
 
+    def _probability_metrics(self, model: Any, X: np.ndarray, y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        try:
+            from scipy.stats import norm as _norm
+        except Exception:
+            return out
+        ks: List[int] = list(map(int, config.get('evaluation.rank_metrics.k_list', config.get('prediction.top_k_thresholds', [3, 10]))))
+        sigma: float
+        try:
+            sigma = float(getattr(model, 'calibration_', {}).get('oof_residual_std', np.nan))
+        except Exception:
+            sigma = np.nan
+        if not np.isfinite(sigma) or sigma <= 0:
+            try:
+                sigma = float(np.std(np.asarray(y_pred, dtype=float) - np.asarray(y_true, dtype=float)))
+            except Exception:
+                sigma = 1.5
+        sigma = max(1e-6, sigma)
+        for k in ks:
+            events = (np.asarray(y_true, dtype=float) <= float(k)).astype(int)
+            probs = _norm.cdf(((float(k) + 0.5) - np.asarray(y_pred, dtype=float)) / sigma)
+            probs = np.clip(probs, 1e-6, 1 - 1e-6)
+            try:
+                out[f'brier_top{k}'] = float(brier_score_loss(events, probs))
+            except Exception:
+                pass
+            try:
+                out[f'logloss_top{k}'] = float(log_loss(events, probs))
+            except Exception:
+                pass
+        return out
+
     def _calculate_event_level_metrics(self, X: pd.DataFrame, y_true: np.ndarray, y_pred: np.ndarray) -> Tuple[Dict[str, float], pd.DataFrame]:
         """Compute per-event metrics then aggregate, including NDCG@k and MAP@k."""
         try:
             from scipy.stats import spearmanr
         except Exception:
             spearmanr = None                
-        groups = X[['Year', 'Race_Num']].apply(tuple, axis=1).values
-        unique_groups = list(dict.fromkeys(groups))
+        # Use a pure-Python list of tuples for stable equality checks across numpy/pandas versions.
+        groups_list = list(
+            map(tuple, X[["Year", "Race_Num"]].itertuples(index=False, name=None))
+        )
+        unique_groups = list(dict.fromkeys(groups_list))
         k_list: List[int] = list(map(int, config.get('evaluation.rank_metrics.k_list', config.get('prediction.top_k_thresholds', [3, 10]))))
         rows: List[Dict[str, Any]] = []
         for g in unique_groups:
-            idxs = np.where(groups == g)[0]
+            idxs = np.asarray([i for i, gg in enumerate(groups_list) if gg == g], dtype=int)
             if idxs.size < 3:
                 continue
             yt = y_true[idxs].astype(float)

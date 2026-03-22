@@ -1,51 +1,50 @@
-# F1 Prediction System v3.0 - Production Dependencies
+# F1 Prediction System - Dependencies
 
 # Core Data Science Libraries
-pandas==2.2.2
-numpy==1.26.4
-scikit-learn==1.6.1
+pandas==2.3.3
+numpy==2.4.2
+scikit-learn==1.8.0
 
 # Machine Learning Models
-lightgbm==4.3.0
-xgboost==3.0.2
+lightgbm==4.6.0
+xgboost==3.1.3
 # catboost>=1.2.0
 
 # Neural Networks
 # tensorflow>=2.13.0
 # torch>=2.0.0
 
-# Hyperparameter Optimization
-optuna==3.6.1  # optional; used when hyperparameter_optimization.enabled is true
+# Hyperparameter Optimization (optional; used when hyperparameter_optimization.enabled is true)
+# optuna==3.6.1
 
 # F1 Data Source
-fastf1==3.3.4
+fastf1==3.7.0
 
-# Data Validation and Quality
-pydantic==2.7.4  # optional
+# Data Validation and Quality (optional)
+# pydantic==2.7.4
 
 # Database
-duckdb==0.10.2  # optional
 
-# MLflow for Experiment Tracking
-mlflow==2.16.2  # optional
+
+# MLflow for Experiment Tracking (optional)
+# mlflow==2.16.2
 
 # Visualization
-matplotlib==3.8.4
+matplotlib==3.10.8
 seaborn==0.13.2
-plotly==5.22.0
+plotly==6.5.2
+
+# Interactive UI (frontend)
+streamlit==1.54.0
 
 # Configuration Management
-pyyaml==6.0.2
+pyyaml==6.0.3
 
 # Statistical Analysis
-# Pin a SciPy version with Python 3.13 wheels
-scipy==1.14.1
+scipy==1.17.0
 
 # Progress Bars and CLI
 tqdm==4.66.4
-
-# Logging and Monitoring
-structlog==24.2.0
 
 # Date/Time Handling
 python-dateutil==2.9.0.post0
@@ -58,7 +57,7 @@ requests-cache==1.2.1  # optional
 joblib==1.4.2
 
 # Memory Profiling (optional, for performance monitoring)
-memory-profiler==0.61.0  # optional
+# memory-profiler==0.61.0
 
 # Type Checking (development)
 mypy==1.10.1  # dev-only

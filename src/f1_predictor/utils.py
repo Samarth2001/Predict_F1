@@ -1,39 +1,23 @@
-"""Utility functions for the F1 prediction project."""
+"""Utility functions for the F1 prediction project.
+
+This module also contains helpers for canonicalizing entity names (drivers/teams/circuits),
+deriving stable IDs, and performing safe DataFrame merges with guardrails to prevent
+silent mismatches that can cause leakage or dropped rows.
+"""
 
 from __future__ import annotations
 
 import os
-import pickle
 import random
-from typing import Optional
+from typing import Optional, Dict, Any, List
+import logging
+import re
+import unicodedata
+
+from .config import config
 
 import numpy as np
 import pandas as pd
-
-
-def save_object(obj, filepath: str) -> None:
-    """Save a Python object using pickle to the given file path."""
-    try:
-        with open(filepath, "wb") as f:
-            pickle.dump(obj, f)
-        print(f"Object saved successfully to {filepath}")
-    except Exception as exc:
-        print(f"Error saving object to {filepath}: {exc}")
-
-
-def load_object(filepath: str):
-    """Load a Python object from a pickle file if it exists, else return None."""
-    if not os.path.exists(filepath):
-        print(f"Error: File not found at {filepath}")
-        return None
-    try:
-        with open(filepath, "rb") as f:
-            obj = pickle.load(f)
-        print(f"Object loaded successfully from {filepath}")
-        return obj
-    except Exception as exc:
-        print(f"Error loading object from {filepath}: {exc}")
-        return None
 
 
 def time_to_seconds(time_str: str) -> float:
@@ -147,4 +131,151 @@ def downcast_dataframe(
                 except Exception:
                     pass
     return result
+
+
+# --------------------------------------------------------------------------------------
+# Entity canonicalization and ID generation
+# --------------------------------------------------------------------------------------
+
+logger = logging.getLogger(__name__)
+
+
+def _ascii_slug(text: str) -> str:
+    """Return a lowercase ASCII slug for a given text for use in stable IDs."""
+    if text is None or (isinstance(text, float) and np.isnan(text)):
+        return ""
+    try:
+        txt = str(text).strip()
+        # Normalize unicode to ASCII where possible
+        txt = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode("ascii")
+        txt = txt.lower()
+        # Remove non-alphanumeric except spaces and hyphens
+        txt = re.sub(r"[^a-z0-9\s-]", "", txt)
+        txt = re.sub(r"\s+", "-", txt).strip("-")
+        txt = re.sub(r"-+", "-", txt)
+        return txt
+    except Exception:
+        return ""
+
+
+def _normalize_circuit_name(name: str) -> str:
+    """Normalize circuit names by ensuring the ' Grand Prix' suffix and applying aliases.
+
+    Aliases are pulled from feature_engineering.canonicalization.circuits in config.
+    """
+    if name is None or (isinstance(name, float) and np.isnan(name)):
+        return name
+    s = str(name).strip()
+    circuits_map: Dict[str, str] = config.get("feature_engineering.canonicalization.circuits", {}) or {}
+    # First apply explicit mapping if any
+    if s in circuits_map:
+        s = circuits_map[s]
+    # Ensure standard suffix
+    if not s.endswith(" Grand Prix"):
+        s = f"{s} Grand Prix"
+    return s
+
+
+def canonicalize_entities(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply driver/team/circuit canonicalization configured in YAML.
+
+    - Drivers and Teams use explicit maps if provided; otherwise, values pass through
+    - Circuits also get normalized to include the ' Grand Prix' suffix as needed
+    """
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    try:
+        drivers_map: Dict[str, str] = config.get("feature_engineering.canonicalization.drivers", {}) or {}
+        teams_map: Dict[str, str] = config.get("feature_engineering.canonicalization.teams", {}) or {}
+
+        if "Driver" in out.columns and drivers_map:
+            out["Driver"] = out["Driver"].astype(str).map(lambda x: drivers_map.get(x, x))
+        if "Team" in out.columns and teams_map:
+            out["Team"] = out["Team"].astype(str).map(lambda x: teams_map.get(x, x))
+        if "Circuit" in out.columns:
+            out["Circuit"] = out["Circuit"].map(_normalize_circuit_name)
+    except Exception as e:
+        logger.warning(f"Canonicalization failed; proceeding without changes: {e}")
+    return out
+
+
+def add_entity_ids(df: pd.DataFrame) -> pd.DataFrame:
+    """Add stable ID columns for Driver, Team, and Circuit: Driver_ID, Team_ID, Circuit_ID.
+
+    IDs are generated from canonicalized names using ASCII slugs with prefixes:
+      - drv:<slug>
+      - team:<slug>
+      - circuit:<slug>
+    """
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    try:
+        if "Driver" in out.columns and "Driver_ID" not in out.columns:
+            out["Driver_ID"] = out["Driver"].map(lambda x: f"drv:{_ascii_slug(x)}")
+        if "Team" in out.columns and "Team_ID" not in out.columns:
+            out["Team_ID"] = out["Team"].map(lambda x: f"team:{_ascii_slug(x)}")
+        if "Circuit" in out.columns and "Circuit_ID" not in out.columns:
+            out["Circuit_ID"] = out["Circuit"].map(lambda x: f"circuit:{_ascii_slug(x)}")
+    except Exception as e:
+        logger.warning(f"Failed to add entity IDs: {e}")
+    return out
+
+
+def pick_group_col(df: pd.DataFrame, base_name: str) -> str:
+    """Return ID column name if present (e.g., Driver_ID) else fall back to base (e.g., Driver)."""
+    cand = f"{base_name}_ID"
+    if isinstance(df, pd.DataFrame) and cand in df.columns:
+        return cand
+    return base_name
+
+
+def safe_merge(
+    left: pd.DataFrame,
+    right: pd.DataFrame,
+    *,
+    on: List[str],
+    how: str = "left",
+    join_name: str = "merge",
+) -> pd.DataFrame:
+    """Merge with guardrails to prevent silent mismatches.
+
+    Behavior controlled by feature_engineering.join_guard in config:
+      - enabled (bool)
+      - max_unmatched_ratio (float)
+      - on_violation: "warn" | "error"
+    """
+    if left is None or right is None:
+        return pd.DataFrame()
+    guard_enabled = bool(config.get("feature_engineering.join_guard.enabled", True))
+    max_unmatched = float(config.get("feature_engineering.join_guard.max_unmatched_ratio", 0.02))
+    on_violation = str(config.get("feature_engineering.join_guard.on_violation", "warn")).lower()
+
+    if not guard_enabled:
+        return left.merge(right, on=on, how=how)
+
+    try:
+        merged = left.merge(right, on=on, how=how, indicator=True)
+        if how in ("left", "outer"):
+            total_left = max(1, int(left.shape[0]))
+            left_only = int((merged["_merge"] == "left_only").sum())
+            ratio = left_only / total_left
+            if ratio > max_unmatched:
+                msg = (
+                    f"Join '{join_name}' resulted in {left_only}/{total_left} unmatched left rows "
+                    f"({ratio:.2%}) on keys {on}."
+                )
+                if on_violation == "error":
+                    logger.error(msg)
+                    raise ValueError(msg)
+                else:
+                    logger.warning(msg)
+        return merged.drop(columns=["_merge"], errors="ignore")
+    except Exception as e:
+        logger.error(f"Safe merge '{join_name}' failed: {e}")
+        if on_violation == "error":
+            raise
+        # Best-effort fallback without indicator
+        return left.merge(right, on=on, how=how)
 

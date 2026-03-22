@@ -48,9 +48,12 @@ def setup_arg_parser():
     parser = argparse.ArgumentParser(description="F1 Prediction System - Unified Workflow")
     subparsers = parser.add_subparsers(dest='command', required=True, help='Available commands')
 
-                                
+    # Data fetching subcommand
     fetch_parser = subparsers.add_parser('fetch-data', help='Fetch data from APIs.')
     fetch_parser.add_argument('--force', action='store_true', help='Force refetching all data, ignoring cache.')
+    fetch_parser.add_argument('--latest-only', action='store_true', help='Fetch only the latest session data (qualifying/race).')
+    fetch_parser.add_argument('--year', type=int, default=None, help='Specific year to fetch (defaults to current year).')
+    fetch_parser.add_argument('--round', type=int, default=None, help='Specific round number to fetch.')
     
                            
     train_parser = subparsers.add_parser('train', help='Train prediction models.')
@@ -90,13 +93,28 @@ def setup_arg_parser():
 
 def handle_fetch_data(args):
     """Handle the data fetching process."""
-    logger.info("Starting data fetching process...")
     from f1_predictor.data_loader import F1DataCollector
     collector = F1DataCollector()
-    if not collector.fetch_all_f1_data(force_refresh=args.force):
-        logger.error("Data fetching failed.")
-        sys.exit(1)
-    logger.info("Data fetching completed successfully.")
+    
+    year = args.year or datetime.now().year
+    round_num = getattr(args, 'round', None)
+    latest_only = getattr(args, 'latest_only', False)
+    
+    if latest_only or round_num is not None:
+        # Fetch only specific session(s)
+        logger.info(f"Fetching specific session data: year={year}, round={round_num or 'latest'}")
+        success = collector.fetch_specific_session(year=year, round_num=round_num)
+        if not success:
+            logger.error("Session data fetch failed.")
+            sys.exit(1)
+        logger.info("Session data fetch completed successfully.")
+    else:
+        # Full incremental fetch
+        logger.info("Starting incremental data fetch (only new/missing races)...")
+        if not collector.fetch_all_f1_data(force_refresh=args.force):
+            logger.error("Data fetching failed.")
+            sys.exit(1)
+        logger.info("Data fetching completed successfully.")
 
 
 def handle_train(args):

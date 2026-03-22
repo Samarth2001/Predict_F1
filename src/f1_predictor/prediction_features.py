@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 
 from .data_loader import F1DataLoader
 from .feature_engineering_pipeline import FeatureEngineeringPipeline
+from .utils import safe_merge
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,20 @@ class PredictionFeatureBuilder:
 
                                    
             upcoming_df = upcoming_df.copy()
+            # Simple grid penalty support: if an input column 'Grid_Penalty_Offset' exists,
+            # derive 'Grid' for prediction by applying the offset to any provided 'Grid'/'Quali_Pos'.
+            if 'Grid_Penalty_Offset' in upcoming_df.columns:
+                try:
+                    base_grid = None
+                    if 'Grid' in upcoming_df.columns:
+                        base_grid = pd.to_numeric(upcoming_df['Grid'], errors='coerce')
+                    elif 'Quali_Pos' in upcoming_df.columns:
+                        base_grid = pd.to_numeric(upcoming_df['Quali_Pos'], errors='coerce')
+                    if base_grid is not None:
+                        pen = pd.to_numeric(upcoming_df['Grid_Penalty_Offset'], errors='coerce').fillna(0).astype(float)
+                        upcoming_df['Grid'] = (base_grid + pen).clip(lower=1)
+                except Exception:
+                    pass
                                                                                       
             if 'Date' not in upcoming_df.columns or upcoming_df['Date'].isna().all():
                 try:
@@ -61,10 +76,10 @@ class PredictionFeatureBuilder:
 
                                                                                                                     
             if 'Position' in hist_quali.columns and 'Quali_Pos' not in hist_quali.columns:
-                cols = [c for c in ['Year', 'Race_Num', 'Driver', 'Date', 'Position'] if c in hist_quali.columns]
+                cols = [c for c in ['Year', 'Race_Num', 'Driver', 'Driver_ID', 'Date', 'Position'] if c in hist_quali.columns]
                 historical_quali = hist_quali[cols].rename(columns={'Position': 'Quali_Pos'})
             else:
-                keep_cols = [c for c in ['Year', 'Race_Num', 'Driver', 'Date', 'Quali_Pos'] if c in hist_quali.columns]
+                keep_cols = [c for c in ['Year', 'Race_Num', 'Driver', 'Driver_ID', 'Date', 'Quali_Pos'] if c in hist_quali.columns]
                 historical_quali = hist_quali[keep_cols].copy()
                                                                                                    
             if 'Date' not in historical_quali.columns:
@@ -72,12 +87,29 @@ class PredictionFeatureBuilder:
 
                                                                                                       
             if 'Quali_Pos' in upcoming_df.columns:
-                quali_override = upcoming_df[['Year', 'Race_Num', 'Driver', 'Quali_Pos']].copy()
+                quali_cols = [c for c in ['Year', 'Race_Num', 'Driver', 'Driver_ID', 'Quali_Pos'] if c in upcoming_df.columns]
+                quali_override = upcoming_df[quali_cols].copy()
                 historical_quali = pd.concat([historical_quali, quali_override], ignore_index=True)
                 historical_quali.sort_values(['Year', 'Race_Num'], inplace=True)
-                historical_quali.drop_duplicates(['Year', 'Race_Num', 'Driver'], keep='last', inplace=True)
+                dedup_keys = [c for c in ['Year', 'Race_Num', 'Driver_ID'] if c in historical_quali.columns]
+                if not dedup_keys:
+                    dedup_keys = ['Year', 'Race_Num', 'Driver']
+                historical_quali.drop_duplicates(dedup_keys, keep='last', inplace=True)
 
                                                                                             
+            # Normalize any accidental merge suffixes in upcoming_df before concatenation
+            try:
+                if 'Driver_x' in upcoming_df.columns and 'Driver' not in upcoming_df.columns:
+                    upcoming_df = upcoming_df.rename(columns={'Driver_x': 'Driver'})
+                if 'Driver_y' in upcoming_df.columns and 'Driver' not in upcoming_df.columns:
+                    upcoming_df = upcoming_df.rename(columns={'Driver_y': 'Driver'})
+                # Prefer IDs when available to avoid ambiguous name columns
+                if 'Driver_ID' in upcoming_df.columns and 'Driver' in upcoming_df.columns:
+                    # Keep Driver for readability but ensure no duplicate suffixed variants
+                    pass
+            except Exception:
+                pass
+
             combined_races = pd.concat([hist_races, upcoming_df], ignore_index=True) if not hist_races.empty else upcoming_df
 
                                                                          
@@ -86,6 +118,22 @@ class PredictionFeatureBuilder:
 
                                                                   
             upcoming_features = all_features.tail(len(upcoming_df)).copy()
+            # Scenario gating to prevent leakage in pre-quali/pre-weekend contexts.
+            # If 'Post_Quali' not asserted, drop any columns that encode post-quali/race outcomes.
+            try:
+                post_quali = 0
+                if 'Post_Quali' in upcoming_df.columns:
+                    post_quali = int(pd.to_numeric(upcoming_df['Post_Quali'], errors='coerce').fillna(0).iloc[0])
+                if post_quali == 0:
+                    disallow = set([
+                        'Position', 'Grid_Delta', 'Adj_Grid_Delta',
+                        'Teammate_Gap_Race_short'
+                    ])
+                    drop_cols = [c for c in upcoming_features.columns if c in disallow]
+                    if drop_cols:
+                        upcoming_features.drop(columns=drop_cols, inplace=True, errors='ignore')
+            except Exception:
+                pass
 
                                                                                                             
             upcoming_features.drop(columns=[c for c in ['Position'] if c in upcoming_features.columns], inplace=True, errors='ignore')

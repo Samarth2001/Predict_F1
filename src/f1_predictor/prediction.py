@@ -9,6 +9,7 @@ import numpy as np
 from scipy.stats import norm
 
 from .config import config
+from .utils import safe_merge
 from .data_loader import F1DataLoader
 from .feature_engineering_pipeline import FeatureEngineeringPipeline
 from .prediction_features import PredictionFeatureBuilder
@@ -139,12 +140,26 @@ class F1Predictor:
                     )
                     return None
                 logger.info("Post-quali mode: using actual qualifying results.")
-                quali_results = actual_quali[["Driver", "Position"]].rename(
+                quali_results = actual_quali[["Driver", "Driver_ID", "Position"]].rename(
                     columns={"Position": "Quali_Pos"}
                 )
-                upcoming_df = pd.merge(
-                    upcoming_df, quali_results, on="Driver", how="left"
-                )
+                if "Driver_ID" in upcoming_df.columns:
+                    upcoming_df = safe_merge(
+                        upcoming_df,
+                        quali_results,
+                        on=["Driver_ID"],
+                        how="left",
+                        join_name="upcoming_x_actual_quali",
+                    )
+                else:
+                    upcoming_df = safe_merge(
+                        upcoming_df,
+                        quali_results.drop(columns=["Driver_ID"], errors="ignore"),
+                        on=["Driver"],
+                        how="left",
+                        join_name="upcoming_x_actual_quali_name",
+                    )
+                upcoming_df = self._normalize_merge_suffixes(upcoming_df)
                 upcoming_df["Post_Quali"] = 1
                 try:
                     self._persist_quali_used_for_race(
@@ -166,15 +181,28 @@ class F1Predictor:
                     year, race_name, scenario="pre_quali"
                 )
                 if quali_predictions is not None:
-                    upcoming_df = pd.merge(
-                        upcoming_df,
-                        quali_predictions[["Driver", "Predicted_Quali_Pos"]],
-                        on="Driver",
-                        how="left",
-                    )
+                    cols = [c for c in ["Driver", "Driver_ID", "Predicted_Quali_Pos"] if c in quali_predictions.columns]
+                    tmp = quali_predictions[cols].copy()
+                    if "Driver_ID" in upcoming_df.columns and "Driver_ID" in tmp.columns:
+                        upcoming_df = safe_merge(
+                            upcoming_df,
+                            tmp,
+                            on=["Driver_ID"],
+                            how="left",
+                            join_name="upcoming_x_predicted_quali",
+                        )
+                    else:
+                        upcoming_df = safe_merge(
+                            upcoming_df,
+                            tmp.drop(columns=["Driver_ID"], errors="ignore"),
+                            on=["Driver"],
+                            how="left",
+                            join_name="upcoming_x_predicted_quali_name",
+                        )
                     upcoming_df.rename(
                         columns={"Predicted_Quali_Pos": "Quali_Pos"}, inplace=True
                     )
+                    upcoming_df = self._normalize_merge_suffixes(upcoming_df)
                     upcoming_df["Post_Quali"] = 0
                     try:
                         tmp = upcoming_df[
@@ -193,9 +221,23 @@ class F1Predictor:
                     quali_results = actual_quali[["Driver", "Position"]].rename(
                         columns={"Position": "Quali_Pos"}
                     )
-                    upcoming_df = pd.merge(
-                        upcoming_df, quali_results, on="Driver", how="left"
-                    )
+                    if "Driver_ID" in upcoming_df.columns and "Driver_ID" in quali_results.columns:
+                        upcoming_df = safe_merge(
+                            upcoming_df,
+                            quali_results,
+                            on=["Driver_ID"],
+                            how="left",
+                            join_name="upcoming_x_actual_quali_auto",
+                        )
+                    else:
+                        upcoming_df = safe_merge(
+                            upcoming_df,
+                            quali_results.drop(columns=["Driver_ID"], errors="ignore"),
+                            on=["Driver"],
+                            how="left",
+                            join_name="upcoming_x_actual_quali_auto_name",
+                        )
+                    upcoming_df = self._normalize_merge_suffixes(upcoming_df)
                     upcoming_df["Post_Quali"] = 1
                     try:
                         self._persist_quali_used_for_race(
@@ -216,15 +258,28 @@ class F1Predictor:
                         year, race_name, scenario="pre_quali"
                     )
                     if quali_predictions is not None:
-                        upcoming_df = pd.merge(
-                            upcoming_df,
-                            quali_predictions[["Driver", "Predicted_Quali_Pos"]],
-                            on="Driver",
-                            how="left",
-                        )
+                        cols = [c for c in ["Driver", "Driver_ID", "Predicted_Quali_Pos"] if c in quali_predictions.columns]
+                        tmp = quali_predictions[cols].copy()
+                        if "Driver_ID" in upcoming_df.columns and "Driver_ID" in tmp.columns:
+                            upcoming_df = safe_merge(
+                                upcoming_df,
+                                tmp,
+                                on=["Driver_ID"],
+                                how="left",
+                                join_name="upcoming_x_predicted_quali_auto",
+                            )
+                        else:
+                            upcoming_df = safe_merge(
+                                upcoming_df,
+                                tmp.drop(columns=["Driver_ID"], errors="ignore"),
+                                on=["Driver"],
+                                how="left",
+                                join_name="upcoming_x_predicted_quali_auto_name",
+                            )
                         upcoming_df.rename(
                             columns={"Predicted_Quali_Pos": "Quali_Pos"}, inplace=True
                         )
+                        upcoming_df = self._normalize_merge_suffixes(upcoming_df)
                         try:
                             tmp = upcoming_df[
                                 ["Driver", "Quali_Pos", "Year", "Race_Num"]
@@ -246,22 +301,44 @@ class F1Predictor:
             rnd = int(upcoming_df.iloc[0]["Race_Num"])
             grid_df = hist_races[
                 (hist_races["Year"] == yr) & (hist_races["Race_Num"] == rnd)
-            ][["Driver", "Grid"]]
+            ][["Driver", "Driver_ID", "Grid"] if "Driver_ID" in hist_races.columns else ["Driver", "Grid"]]
             if not grid_df.empty:
-                upcoming_df = pd.merge(upcoming_df, grid_df, on="Driver", how="left")
+                if "Driver_ID" in upcoming_df.columns and "Driver_ID" in grid_df.columns:
+                    # Avoid duplicate 'Driver' columns when merging on Driver_ID
+                    grid_merge = grid_df.drop(columns=["Driver"], errors="ignore")
+                    upcoming_df = safe_merge(
+                        upcoming_df, grid_merge, on=["Driver_ID"], how="left", join_name="upcoming_x_grid"
+                    )
+                else:
+                    upcoming_df = safe_merge(
+                        upcoming_df,
+                        grid_df.drop(columns=["Driver_ID"], errors="ignore"),
+                        on=["Driver"],
+                        how="left",
+                        join_name="upcoming_x_grid_name",
+                    )
         if "Grid" not in upcoming_df.columns and "Quali_Pos" in upcoming_df.columns:
             upcoming_df["Grid"] = upcoming_df["Quali_Pos"]
         upcoming_df["Parc_Ferme"] = upcoming_df["Post_Quali"]
 
         features_df = self._prepare_features(upcoming_df)
 
+        # Guard against empty feature matrix
+        if features_df is None or features_df.empty:
+            logger.error("No features produced for race prediction.")
+            return None
         features_used = self._load_and_enforce_metadata("race", features_df)
         if not features_used:
             logger.error(
                 "Model metadata missing or no matching features found for race. Aborting."
             )
             return None
-        raw_scores = self.race_model.predict(features_df[features_used])
+        # Double-check the selected matrix is non-empty and 2D
+        X = features_df[features_used]
+        if X is None or X.empty:
+            logger.error("Selected feature set for race is empty after alignment.")
+            return None
+        raw_scores = self.race_model.predict(X)
         if bool(config.get("models.race.use_ranking", False)):
             order = np.argsort(-raw_scores)
             ranks = np.empty_like(order)
@@ -307,6 +384,7 @@ class F1Predictor:
                 else:
                     dnf_pos_series = pd.Series(default_dnf_pos, index=features_df.index)
                 dnf_pos = dnf_pos_series.astype(float).values
+                # Blend expected finishing position with DNF-adjusted fallback
                 expected_pos = (1 - p_dnf) * predictions + p_dnf * dnf_pos
                 predictions = expected_pos
             except Exception as e:
@@ -521,6 +599,31 @@ class F1Predictor:
         """Build inference-time features for upcoming rows only."""
         return self.pred_features.build(df)
 
+    @staticmethod
+    def _normalize_merge_suffixes(df: pd.DataFrame) -> pd.DataFrame:
+        """Coalesce common merge suffixes (e.g., Driver_x/Driver_y) back into canonical columns.
+
+        This prevents downstream code from losing human-readable columns such as Driver/Team when
+        we merge on IDs (Driver_ID/Team_ID).
+        """
+        if df is None or df.empty:
+            return df
+        out = df.copy()
+        for base in ("Driver", "Team"):
+            x = f"{base}_x"
+            y = f"{base}_y"
+            if x not in out.columns and y not in out.columns:
+                continue
+            if base not in out.columns:
+                if x in out.columns and y in out.columns:
+                    out[base] = out[x].where(out[x].notna(), out[y])
+                elif x in out.columns:
+                    out[base] = out[x]
+                else:
+                    out[base] = out[y]
+            out.drop(columns=[x, y], inplace=True, errors="ignore")
+        return out
+
     def _format_results(
         self,
         upcoming_df: pd.DataFrame,
@@ -535,7 +638,8 @@ class F1Predictor:
         - raw_scores: optional model scores (e.g., ranker scores, higher better)
         - score_type: 'rank_score' when raw_scores are ranking scores; 'position_value' otherwise
         """
-        results = upcoming_df[["Driver", "Team"]].copy()
+        keep_cols = [c for c in ["Driver", "Driver_ID", "Team", "Team_ID", "Year", "Race_Num"] if c in upcoming_df.columns]
+        results = upcoming_df[keep_cols].copy()
                                                                           
         pos = np.asarray(positions, dtype=float)
         results["Predicted_Pos"] = pos
@@ -547,10 +651,8 @@ class F1Predictor:
             results["Prediction_Score"] = results["Predicted_Pos"]
             results["Score_Type"] = score_type
         results = results.sort_values("Predicted_Pos").reset_index(drop=True)
-        return results[
-            ["Predicted_Pos", "Driver", "Team", "Prediction_Score", "Score_Type"]
-            + (["Model_Score"] if "Model_Score" in results.columns else [])
-        ]
+        ordered = [c for c in ["Predicted_Pos", "Driver", "Driver_ID", "Team", "Team_ID", "Year", "Race_Num", "Prediction_Score", "Score_Type", "Model_Score"] if c in results.columns]
+        return results[ordered]
 
     def _save_prediction_results(
         self,
@@ -720,12 +822,25 @@ class F1Predictor:
                     return []
 
                                                                                
+            # Only enforce missing features as critical when explicitly configured.
+            # If no critical list is provided, do not fail-fast; rely on imputation below.
             critical_cols = set(config.get("general.critical_features", []))
+
+            if critical_cols:
+                required_set = {c for c in critical_cols if c in feature_names}
+            else:
+                required_set = set()
+
+            # Exempt features intentionally dropped by scenario gating
+            try:
+                scenario_drop = set(
+                    config.get("feature_engineering.scenario_gate.pre_quali_drop", [])
+                )
+            except Exception:
+                scenario_drop = set()
+
             missing_required = [
-                col
-                for col in feature_names
-                if col not in features_df.columns
-                and (not critical_cols or col in critical_cols)
+                col for col in required_set if col not in features_df.columns and col not in scenario_drop
             ]
             if missing_required and bool(
                 config.get("general.strict_feature_enforcement", True)

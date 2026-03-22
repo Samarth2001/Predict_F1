@@ -66,6 +66,17 @@ python scripts/predict.py predict --year 2025 --race "Italian Grand Prix" --sess
 python scripts/predict.py predict simulate --year 2026 --race "Italian Grand Prix" --session race --lineup path/to/lineup.csv
 ```
 
+### Interactive App (Streamlit)
+
+Run an interactive UI for:
+- Qualifying predictions
+- Race predictions (auto / pre-weekend / pre-quali / post-quali)
+- Basic telemetry exploration (fastest-lap speed trace)
+
+```bash
+streamlit run streamlit_app.py
+```
+
 ---
 
 ## Training strategies and scenarios

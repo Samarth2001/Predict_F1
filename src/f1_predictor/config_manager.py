@@ -84,6 +84,14 @@ class ConfigManager:
         self._config = deepcopy(merged)
         self._resolve_paths()
         self._resolve_dynamic_values()
+        try:
+            logger.info("Effective configuration loaded (default.yaml -> local.yaml overlay).")
+            logger.info(f"Default config path: {self._default_config_path}")
+            if os.path.exists(self._local_config_path):
+                logger.info(f"Local overrides path: {self._local_config_path}")
+            logger.info(f"Config hash: {self._config_hash}")
+        except Exception:
+            pass
 
     def _load_yaml(self, path: str, required: bool = True) -> Dict[str, Any]:
         try:
@@ -144,6 +152,25 @@ class ConfigManager:
         if value is None:
             raise KeyError(f"Configuration key '{key}' not found.")
         return value
+
+    def get_training_config(self) -> Dict[str, Any]:
+        """Convenience accessor for the 'training' section with sane defaults."""
+        training_cfg = self.get("training", {}) or {}
+        # Ensure nested defaults exist
+        training_cfg.setdefault("cv_config", {})
+        training_cfg.setdefault("training_config", {})
+        training_cfg.setdefault("parallel", {})
+        training_cfg.setdefault("ensemble", {})
+        return training_cfg
+
+    def get_compute_config(self) -> Dict[str, Any]:
+        """Convenience accessor for the 'compute' section with defaults."""
+        compute_cfg = self.get("compute", {}) or {}
+        if "use_gpu" not in compute_cfg:
+            compute_cfg["use_gpu"] = "auto"
+        if "n_jobs" not in compute_cfg:
+            compute_cfg["n_jobs"] = -1
+        return compute_cfg
 
     def get_model_params(self, model_type: str) -> Dict[str, Any]:
         return self.get(f"models.{model_type}_params", {})

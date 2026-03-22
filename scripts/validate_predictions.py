@@ -26,6 +26,7 @@ if str(_SRC) not in sys.path:
 from f1_predictor.config import config
 from f1_predictor.data_loader import F1DataCollector
 from f1_predictor.evaluation import F1ModelEvaluator
+from f1_predictor.config_manager import config_manager
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -198,6 +199,11 @@ class PredictionValidator:
             f"Race: {year} {race_name}",
             f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             f"=" * 80,
+            "",
+            "CONFIG/MODEL METADATA:",
+            "-" * 80,
+            f"Config hash: {getattr(config_manager, 'get_config_hash', lambda: '')()}",
+            f"Model version: {config.get('general.model_version', '')}",
             "",
             "OVERALL METRICS:",
             "-" * 80,
@@ -498,13 +504,42 @@ class PredictionValidator:
 
 
 def main():
-    """Main validation workflow."""
+    """Main validation workflow with CLI support."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Validate F1 race predictions against actual results")
+    parser.add_argument('--year', type=int, default=datetime.now().year, help='Race year')
+    parser.add_argument('--race', type=str, required=True, help='Race name (e.g., "Qatar Grand Prix")')
+    parser.add_argument('--file', type=str, default=None, help='Path to prediction CSV file (optional, finds latest if not provided)')
+    args = parser.parse_args()
+    
+    year = args.year
+    race_name = args.race
+    prediction_file = args.file
+    
+    # Auto-find latest prediction file if not specified
+    if prediction_file is None:
+        pred_dir = config.get("paths.predictions_dir", "artifacts/predictions")
+        race_slug = race_name.replace(" ", "_")
+        try:
+            candidates = [f for f in os.listdir(pred_dir) 
+                         if f.startswith("race_predictions") and race_slug in f and f.endswith(".csv")]
+            if candidates:
+                candidates.sort(reverse=True)
+                prediction_file = os.path.join(pred_dir, candidates[0])
+                logger.info(f"Auto-selected prediction file: {prediction_file}")
+            else:
+                logger.error(f"No prediction files found for {race_name} in {pred_dir}")
+                return
+        except Exception as e:
+            logger.error(f"Error finding prediction file: {e}")
+            return
+    
+    if not os.path.exists(prediction_file):
+        logger.error(f"Prediction file not found: {prediction_file}")
+        return
     
     validator = PredictionValidator()
-    
-    year = 2025
-    race_name = "Singapore Grand Prix"
-    prediction_file = "artifacts/predictions/race_predictions_2025_Singapore Grand Prix_20251009_195213.csv"
     
     print(f"\n{'='*80}")
     print(f"VALIDATING PREDICTIONS FOR {year} {race_name}")
@@ -523,10 +558,15 @@ def main():
     validator.generate_report(merged, metrics, race_name, year)
     
     improvements = validator.suggest_improvements(metrics, merged)
-    print(improvements)
+    try:
+        print(improvements)
+    except UnicodeEncodeError:
+        print(improvements.encode('ascii', 'replace').decode('ascii'))
     
-    improvement_file = f"validation/improvement_suggestions_{year}_{race_name.replace(' ', '_')}.txt"
-    with open(improvement_file, 'w') as f:
+    os.makedirs("validation", exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    improvement_file = f"validation/improvement_suggestions_{year}_{race_name.replace(' ', '_')}_{timestamp}.txt"
+    with open(improvement_file, 'w', encoding='utf-8') as f:
         f.write(improvements)
     logger.info(f"Improvement suggestions saved to: {improvement_file}")
 

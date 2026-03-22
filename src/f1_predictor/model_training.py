@@ -5,7 +5,7 @@ import joblib
 import os
 import json
 from typing import Tuple, Dict, Optional, List, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -20,6 +20,10 @@ from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.neural_network import MLPRegressor
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.isotonic import IsotonicRegression
 from scipy.optimize import linprog
 
 from .config import config
@@ -107,8 +111,9 @@ class EnsembleModel(BaseEstimator, RegressorMixin):
                 row_sums[row_sums == 0] = 1.0
                 weight_matrix = weight_matrix / row_sums
                 return np.sum(preds_matrix * weight_matrix, axis=1)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Dynamic weighting failed in ensemble prediction, falling back to global weights: {e}")
+
 
         if self.weights_ is None or len(self.weights_) != preds_matrix.shape[1]:
             return np.mean(preds_matrix, axis=1)
@@ -121,6 +126,37 @@ class EnsembleModel(BaseEstimator, RegressorMixin):
 
 class F1ModelTrainer:
     """Trains and saves F1 prediction models."""
+
+    def _perform_feature_selection(self, X: pd.DataFrame, y: pd.Series) -> List[str]:
+        if not config.get("general.enable_feature_selection", True):
+            return list(X.columns)
+        
+        logger.info("Performing feature selection...")
+        try:
+            max_features = int(config.get("general.max_features_selection", 100))
+            # Use a simple LGBM for importance
+            lgb_params = {
+                "n_estimators": 100,
+                "learning_rate": 0.1,
+                "num_leaves": 31,
+                "random_state": 42,
+                "n_jobs": -1,
+                "verbose": -1
+            }
+            model = lgb.LGBMRegressor(**lgb_params)
+            model.fit(X, y)
+            
+            importance = pd.DataFrame({
+                "feature": X.columns,
+                "importance": model.feature_importances_
+            }).sort_values("importance", ascending=False)
+            
+            selected_features = importance.head(max_features)["feature"].tolist()
+            logger.info(f"Selected {len(selected_features)} features out of {len(X.columns)}")
+            return selected_features
+        except Exception as e:
+            logger.warning(f"Feature selection failed: {e}. Using all features.")
+            return list(X.columns)
 
     def train_model(
         self, features: pd.DataFrame, target_column_name: str, model_type: str
@@ -143,6 +179,11 @@ class F1ModelTrainer:
                 features, target_column_name
             )
 
+            # Feature Selection
+            selected_features = self._perform_feature_selection(X, y)
+            X = X[selected_features]
+            feature_names = selected_features
+
             if len(X) == 0:
                 logger.error("No training data available.")
                 return None, [], {}
@@ -156,14 +197,17 @@ class F1ModelTrainer:
                         mlflow.set_tracking_uri(tracking_uri)
                     exp_name = config.get("general.mlflow.experiment_name", "f1_prediction")
                     mlflow.set_experiment(exp_name)
-                    mlflow_run = mlflow.start_run(run_name=f"train_{model_type}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}")
+                    mlflow_run = mlflow.start_run(
+                        run_name=f"train_{model_type}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+                    )
                     mlflow.log_params({
                         "model_type": model_type,
                         "cv_strategy": config.get("training.cv_config.cv_strategy"),
                         "cv_folds": int(config.get("training.cv_config.cv_folds", 5)),
                         "use_ranking": bool(config.get(f"models.{model_type}.use_ranking", False)),
                     })
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Failed to initialize MLflow run: {e}")
                     mlflow_run = None
             
                               
@@ -269,7 +313,7 @@ class F1ModelTrainer:
                                         ),
                                         sampler=sampler,
                                         storage=storage if storage else None,
-                                        study_name=f"{algo}_tuning_{model_type}_{datetime.utcnow().isoformat()}",
+                                        study_name=f"{algo}_tuning_{model_type}_{datetime.now(timezone.utc).isoformat()}",
                                         load_if_exists=True if storage else False,
                                     )
                                     timeout_seconds = int(float(config.get("hyperparameter_optimization.timeout_hours", 2)) * 3600)
@@ -306,10 +350,22 @@ class F1ModelTrainer:
                                 local_params["n_jobs"] = estimator_n_jobs
 
                                          
+                        seed_global = int(config.get("general.random_seed", config.get("general.random_state", 42)))
+                        # Detect GPU preference and set estimator params accordingly
+                        try:
+                            use_gpu = str(config.get("compute.use_gpu", "auto")).lower()
+                        except Exception:
+                            use_gpu = "auto"
+
                         if local_use_ranking:
                             group_train = self._build_groups_for_indices(features, train_idx.values)
                             group_val = self._build_groups_for_indices(features, val_idx.values)
                             if algo == "lightgbm_ranker":
+                                if "random_state" not in local_params and "seed" not in local_params:
+                                    local_params["random_state"] = seed_global
+                                if use_gpu in {"true", "auto"}:
+                                    # LightGBM GPU toggle
+                                    local_params["device_type"] = "gpu"
                                 estimator = LGBMRanker(**local_params)
                                 estimator.fit(
                                     X_train,
@@ -341,6 +397,11 @@ class F1ModelTrainer:
                                 params_tmp = {**local_params}
                                 if params_tmp.get("eval_metric", "ndcg") == "map":
                                     params_tmp["eval_metric"] = "ndcg"
+                                if "random_state" not in params_tmp:
+                                    params_tmp["random_state"] = seed_global
+                                if use_gpu in {"true", "auto"}:
+                                    params_tmp["tree_method"] = "gpu_hist"
+                                    params_tmp["predictor"] = "gpu_predictor"
                                 estimator = XGBRanker(**params_tmp)
                                 max_pos = float(np.max(y_train)) if len(y_train) else 0.0
                                 y_train_rel = (max_pos + 1.0) - y_train
@@ -372,6 +433,10 @@ class F1ModelTrainer:
                                 raise ValueError(f"Unsupported base model: {algo}")
                         else:
                             if algo == "lightgbm":
+                                if "random_state" not in local_params and "seed" not in local_params:
+                                    local_params["random_state"] = seed_global
+                                if use_gpu in {"true", "auto"}:
+                                    local_params["device_type"] = "gpu"
                                 estimator = lgb.LGBMRegressor(**local_params)
                                 estimator.fit(
                                     X_train,
@@ -395,6 +460,11 @@ class F1ModelTrainer:
                                     best_iter = None
                                 preds_val_loc = estimator.predict(X_val)
                             elif algo == "xgboost":
+                                if "random_state" not in local_params:
+                                    local_params["random_state"] = seed_global
+                                if use_gpu in {"true", "auto"}:
+                                    local_params["tree_method"] = "gpu_hist"
+                                    local_params["predictor"] = "gpu_predictor"
                                 estimator = xgb.XGBRegressor(**local_params)
                                 estimator.fit(
                                     X_train,
@@ -415,6 +485,16 @@ class F1ModelTrainer:
                                 preds_val_loc = estimator.predict(X_val)
                             elif algo == "random_forest":
                                 estimator = RandomForestRegressor(**local_params)
+                                estimator.fit(X_train, y_train)
+                                preds_val_loc = estimator.predict(X_val)
+                            elif algo == "neural_network":
+                                nn_params = {**config.get_model_params("neural_network"), **(config.get(f"models.{model_type}.overrides.neural_network", {}) or {})}
+                                if "random_state" not in nn_params:
+                                    nn_params["random_state"] = seed_global
+                                estimator = Pipeline([
+                                    ("scaler", StandardScaler()),
+                                    ("mlp", MLPRegressor(**nn_params)),
+                                ])
                                 estimator.fit(X_train, y_train)
                                 preds_val_loc = estimator.predict(X_val)
                             else:
@@ -512,6 +592,10 @@ class F1ModelTrainer:
                             or {}
                         ),
                     }
+                    try:
+                        use_gpu = str(config.get("compute.use_gpu", "auto")).lower()
+                    except Exception:
+                        use_gpu = "auto"
                     if per_algo_best_iterations.get(algo):
                         try:
                             avg_best_iter = int(np.median(np.asarray(per_algo_best_iterations[algo], dtype=float)))
@@ -615,6 +699,8 @@ class F1ModelTrainer:
                                                                                    
                             if limit_estimator_threads and "nthread" in params:
                                 params = {**params, "nthread": estimator_n_jobs}
+                            if use_gpu in {"true", "auto"}:
+                                params = {**params, "tree_method": "gpu_hist", "predictor": "gpu_predictor"}
                             est = xgb.XGBRegressor(**params)
                             try:
                                 split_point = int(len(X_full) * 0.9)
@@ -633,6 +719,16 @@ class F1ModelTrainer:
                         elif algo == "random_forest":
                                                                        
                             est = RandomForestRegressor(**params)
+                            est.fit(X_full, y_full)
+                            final_models[algo] = est
+                        elif algo == "neural_network":
+                            nn_params = {**config.get_model_params("neural_network"), **(config.get(f"models.{model_type}.overrides.neural_network", {}) or {})}
+                            if "random_state" not in nn_params:
+                                nn_params["random_state"] = int(config.get("general.random_seed", 42))
+                            est = Pipeline([
+                                ("scaler", StandardScaler()),
+                                ("mlp", MLPRegressor(**nn_params)),
+                            ])
                             est.fit(X_full, y_full)
                             final_models[algo] = est
                 model = EnsembleModel(final_models)
@@ -664,6 +760,37 @@ class F1ModelTrainer:
                     "oof_residual_std": float(np.std(residuals)),
                     "base_model_names": base_model_names,
                 }
+                try:
+                    method = str(config.get("prediction.calibration.topk.method", "isotonic")).lower()
+                    ks = list(map(int, config.get("evaluation.rank_metrics.k_list", config.get("prediction.top_k_thresholds", [3, 10]))))
+                    from scipy.stats import norm as _norm
+                    mu = np.asarray(ensemble_oof, dtype=float)
+                    sigma = float(model.calibration_.get("oof_residual_std", np.std(residuals)))
+                    sigma = max(1e-6, sigma)
+                    prob_cals: Dict[str, Any] = {}
+                    for k in ks:
+                        probs = _norm.cdf((float(k) + 0.5 - mu) / sigma)
+                        events = (np.asarray(y, dtype=float) <= float(k)).astype(int)
+                        if method == "isotonic":
+                            ir = IsotonicRegression(out_of_bounds="clip")
+                            ir.fit(probs, events)
+                            prob_cals[str(k)] = {
+                                "type": "isotonic",
+                                "X_thresholds_": getattr(ir, "X_thresholds_", []).tolist() if hasattr(ir, "X_thresholds_") else [],
+                                "y_thresholds_": getattr(ir, "y_thresholds_", []).tolist() if hasattr(ir, "y_thresholds_") else [],
+                            }
+                        else:
+                            from sklearn.linear_model import LogisticRegression
+                            lr = LogisticRegression(max_iter=1000)
+                            lr.fit(probs.reshape(-1, 1), events)
+                            prob_cals[str(k)] = {
+                                "type": "platt",
+                                "coef_": lr.coef_.ravel().tolist(),
+                                "intercept_": lr.intercept_.ravel().tolist(),
+                            }
+                    model.calibration_["topk_probability_calibrators"] = prob_cals
+                except Exception as e:
+                    logger.warning(f"Top-K probability calibration failed: {e}")
                 try:
                     if bool(config.get("prediction.calibration.use_quantile_models", True)):
                         lower_q = float(config.get("prediction.calibration.lower_quantile", 0.1))
@@ -823,7 +950,7 @@ class F1ModelTrainer:
                                     ),
                                     sampler=sampler,
                                     storage=storage if storage else None,
-                                    study_name=f"{algo}_tuning_{model_type}_{datetime.utcnow().isoformat()}",
+                                study_name=f"{algo}_tuning_{model_type}_{datetime.now(timezone.utc).isoformat()}",
                                     load_if_exists=True if storage else False,
                                 )
                                 timeout_seconds = int(float(config.get("hyperparameter_optimization.timeout_hours", 2)) * 3600)
@@ -931,8 +1058,13 @@ class F1ModelTrainer:
                     val_matrix = np.column_stack(
                         [est.predict(X_test_f) for est in model.models.values()]
                     )
-                weights = self._optimize_ensemble_weights(
-                    y_test.values if hasattr(y_test, "values") else y_test, val_matrix
+                weights = self._optimize_ensemble_weights_metric(
+                    y_true=(y_test.values if hasattr(y_test, "values") else y_test),
+                    oof_preds=val_matrix,
+                    features=features.loc[X_test.index]
+                    if isinstance(features, pd.DataFrame) and {"Year", "Race_Num"}.issubset(features.columns)
+                    else None,
+                    model_type=model_type,
                 )
                 model.set_weights(list(weights))
                 self._evaluate_model(model, X_test_f, y_test, model_type)
@@ -967,7 +1099,7 @@ class F1ModelTrainer:
                 summary_path: Optional[str] = None
                 summary = {
                     "model_type": model_type,
-                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     "base_models": list(getattr(model, "models", {}).keys()),
                     "weights": list(map(float, getattr(model, "weights_", []))) if hasattr(model, "weights_") else [],
                     "dynamic_weights_segments": list(getattr(model, "weights_by_segment_", {}).keys()) if hasattr(model, "weights_by_segment_") else [],
@@ -980,7 +1112,10 @@ class F1ModelTrainer:
                 }
                 out_dir = config.get("paths.evaluation_dir")
                 os.makedirs(out_dir, exist_ok=True)
-                summary_path = os.path.join(out_dir, f"training_summary_{model_type}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json")
+                summary_path = os.path.join(
+                    out_dir,
+                    f"training_summary_{model_type}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json",
+                )
                 with open(summary_path, "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2)
                 logger.info(f"Training summary saved: {summary_path}")
@@ -1030,8 +1165,8 @@ class F1ModelTrainer:
                     if os.path.exists(model_path):
                         mlflow.log_artifact(model_path, artifact_path="models")
                     mlflow.end_run()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Top-K probability calibration failed: {e}")
             logger.info(f"{model_type} model training completed successfully.")
             return (
                 model,
@@ -1227,15 +1362,40 @@ class F1ModelTrainer:
         data_clean = features.dropna(subset=[target_column]).copy()
 
         y = data_clean[target_column]
-        drop_cols: List[str] = [target_column]
+
+        # Drop columns that are unavailable at prediction time (or are targets/leaky).
+        #
+        # Notes:
+        # - 'DNF', 'Points', 'Laps' are race outcomes; using them to predict the same event is leakage.
+        # - 'Grid' is determined from qualifying + penalties; it must not be used to predict qualifying.
+        # - We still allow Quali_Pos/Grid for race predictions, because those can be known post-quali
+        #   (or imputed / replaced with predicted qualifying in pre-quali/auto modes).
+        drop_cols: List[str] = [target_column, "DNF", "Points", "Laps"]
         if target_column == "Quali_Pos":
-            drop_cols.append("Position")
-        if target_column == "Position":
-            pass
+            drop_cols.extend(["Position", "Grid"])
         X = data_clean.drop(columns=drop_cols, errors="ignore")
 
                                       
         X = X.select_dtypes(include=np.number)
+        if bool(config.get("training.outliers.enabled", True)):
+            try:
+                q_low = float(config.get("training.outliers.q_low", 0.001))
+                q_high = float(config.get("training.outliers.q_high", 0.999))
+                clip_cols = list(X.columns)
+                lowers = X[clip_cols].quantile(q_low).to_dict()
+                uppers = X[clip_cols].quantile(q_high).to_dict()
+                for c in clip_cols:
+                    lo = float(lowers.get(c, np.nan))
+                    hi = float(uppers.get(c, np.nan))
+                    if np.isfinite(lo) and np.isfinite(hi) and lo < hi:
+                        X[c] = X[c].clip(lower=lo, upper=hi)
+            except Exception:
+                pass
+        if bool(config.get("training.collinearity.enabled", True)):
+            try:
+                X = self._trim_collinearity(X, float(config.get("training.collinearity.threshold", 0.98)))
+            except Exception:
+                pass
         feature_names = list(X.columns)
 
                                                                   
@@ -1245,6 +1405,15 @@ class F1ModelTrainer:
             f"Prepared training data: {X.shape[0]} samples, {X.shape[1]} features"
         )
         return X, y, feature_names, imputation_values
+
+    def _trim_collinearity(self, X: pd.DataFrame, threshold: float = 0.98) -> pd.DataFrame:
+        if X is None or X.empty:
+            return X
+        corr = X.corr().abs()
+        upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+        to_drop = [column for column in upper.columns if any(upper[column] >= float(threshold))]
+        keep = [c for c in X.columns if c not in to_drop]
+        return X[keep]
 
     def _save_model(self, model: Any, model_type: str):
         """Save trained model."""
@@ -1311,9 +1480,10 @@ class F1ModelTrainer:
         config_hash_val = getattr(_config_obj, "get_config_hash", lambda: None)()
         model_version_val = str(config.get("general.model_version", ""))
 
+        seed_global = int(config.get("general.random_seed", config.get("general.random_state", 42)))
         metadata: Dict[str, Any] = {
             "model_type": model_type,
-            "trained_at": datetime.utcnow().isoformat() + "Z",
+            "trained_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "model_version": model_version_val,
             "config_hash": config_hash_val,
             "git_commit": git_commit,
@@ -1324,6 +1494,14 @@ class F1ModelTrainer:
             },
             "ensemble": ensemble_info,
             "calibration": getattr(model, "calibration_", {}),
+            "seeds": {
+                "global": seed_global,
+                "lightgbm": config.get_model_params("lightgbm").get("random_state", config.get_model_params("lightgbm").get("seed", None)),
+                "xgboost": config.get_model_params("xgboost").get("random_state", None),
+                "lightgbm_ranker": config.get_model_params("lightgbm_ranker").get("random_state", config.get_model_params("lightgbm_ranker").get("seed", None)) if hasattr(config, "get_model_params") else None,
+                "xgboost_ranker": config.get_model_params("xgboost_ranker").get("random_state", None) if hasattr(config, "get_model_params") else None,
+                "neural_network": config.get_model_params("neural_network").get("random_state", None) if hasattr(config, "get_model_params") else None,
+            },
             "holdout_years": config.get("evaluation.holdout_years", []),
             "config": {
                 "base_models": config.get(f"models.{model_type}.base_models", None)
@@ -1480,9 +1658,15 @@ class F1ModelTrainer:
         if features is None or not {"Year", "Race_Num"}.issubset(features.columns):
             logger.warning("Ranking metric requested but grouping columns missing; falling back to MAE.")
             return self._optimize_ensemble_weights_metric(y_true, oof_preds, None, model_type)
-        groups = features[["Year", "Race_Num"]].apply(tuple, axis=1).values
-        unique_groups = list(dict.fromkeys(groups))
-        idx_by_group: Dict[Any, np.ndarray] = {g: np.where(groups == g)[0] for g in unique_groups}
+        # Use a pure-Python list of tuples for stable equality checks across numpy/pandas versions.
+        groups_list = list(
+            map(tuple, features[["Year", "Race_Num"]].itertuples(index=False, name=None))
+        )
+        unique_groups = list(dict.fromkeys(groups_list))
+        idx_by_group: Dict[Any, np.ndarray] = {
+            g: np.asarray([i for i, gg in enumerate(groups_list) if gg == g], dtype=int)
+            for g in unique_groups
+        }
         def eval_weights(w: np.ndarray) -> float:
             preds = oof_preds.dot(w)
             if metric == "spearman":

@@ -22,7 +22,7 @@ except Exception:
 warnings.filterwarnings("ignore")
 
 from .config import config
-from .utils import set_global_seeds
+from .utils import set_global_seeds, canonicalize_entities, add_entity_ids
 
                                                  
 fastf1.Cache.enable_cache(config.get("paths.cache_dir"))
@@ -121,7 +121,11 @@ class F1DataCollector:
         self, start_year: int = None, end_year: int = None, force_refresh: bool = False
     ) -> bool:
         start_year = start_year or config.get("data_collection.start_year")
-        end_year = end_year or config.get("data_collection.end_year")
+        end_year_cfg = config.get("data_collection.end_year")
+        if end_year_cfg == "auto" or end_year_cfg is None:
+            end_year = end_year or datetime.now().year
+        else:
+            end_year = end_year or int(end_year_cfg)
         logger.info(
             f"Starting data collection from {start_year} to {end_year}. Force refresh: {force_refresh}"
         )
@@ -148,20 +152,125 @@ class F1DataCollector:
             logger.error(f"Data collection failed: {e}", exc_info=True)
             return False
 
+    def fetch_specific_session(
+        self, year: int = None, round_num: int = None
+    ) -> bool:
+        """Fetch data for a specific session or the latest available session.
+        
+        Args:
+            year: Season year (defaults to current year)
+            round_num: Specific round to fetch (defaults to latest completed or in-progress)
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        year = year or datetime.now().year
+        logger.info(f"Fetching specific session: year={year}, round={round_num or 'latest'}")
+        
+        try:
+            schedule = fastf1.get_event_schedule(year, include_testing=False)
+            if schedule.empty:
+                logger.warning(f"No schedule found for {year}.")
+                return False
+            
+            schedule = schedule.sort_values("RoundNumber")
+            now_utc = pd.Timestamp.utcnow()
+            
+            if round_num is not None:
+                # Fetch specific round
+                event_rows = schedule[schedule["RoundNumber"] == round_num]
+                if event_rows.empty:
+                    logger.error(f"Round {round_num} not found in {year} schedule.")
+                    return False
+                target_event = event_rows.iloc[0]
+            else:
+                # Find the latest completed or in-progress event
+                schedule["EventDate"] = pd.to_datetime(schedule["EventDate"], errors="coerce", utc=True)
+                # Get events that have started (event date is in the past or today)
+                past_events = schedule[schedule["EventDate"] <= now_utc]
+                if past_events.empty:
+                    logger.info("No completed events yet this season.")
+                    return False
+                target_event = past_events.iloc[-1]
+            
+            round_num = int(target_event["RoundNumber"])
+            event_name = str(target_event["EventName"])
+            logger.info(f"Fetching data for: {year} Round {round_num} - {event_name}")
+            
+            # Try qualifying FIRST (usually available before race results)
+            quali_df = pd.DataFrame()
+            race_df = pd.DataFrame()
+            
+            logger.info("Attempting to fetch qualifying data...")
+            try:
+                quali_df = self._fetch_session_with_retry(year, round_num, "Q", target_event)
+                if not quali_df.empty:
+                    self._append_and_save(quali_df, config.get("paths.quali_csv"))
+                    self._update_ingestion_state(year, round_num, quali_df)
+                    logger.info(f"Qualifying data saved: {len(quali_df)} rows")
+                else:
+                    logger.info("Qualifying data not yet available (session may have just finished)")
+            except Exception as e:
+                logger.warning(f"Qualifying data fetch failed (may not be available yet): {e}")
+            
+            # Then try race (may not be available for upcoming events)
+            logger.info("Attempting to fetch race data...")
+            try:
+                race_df = self._fetch_session_with_retry(year, round_num, "R", target_event)
+                if not race_df.empty:
+                    self._append_and_save(race_df, config.get("paths.races_csv"))
+                    self._update_ingestion_state(year, round_num, race_df)
+                    logger.info(f"Race data saved: {len(race_df)} rows")
+                else:
+                    logger.info("Race data not available (race may not have happened yet)")
+            except Exception as e:
+                logger.info(f"Race data not available yet: {e}")
+            
+            if race_df.empty and quali_df.empty:
+                logger.warning(f"No session data available yet for {year} Round {round_num} - {event_name}")
+                logger.info("TIP: If the session just finished, try again in a few minutes.")
+                return False
+            
+            # Clear feature cache to ensure fresh features with new data
+            self._clear_feature_cache()
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to fetch specific session: {e}", exc_info=True)
+            return False
+    
+    def _clear_feature_cache(self):
+        """Clear the feature cache to force recomputation with new data."""
+        try:
+            cache_dir = config.get("paths.features_cache_dir")
+            if cache_dir and os.path.exists(cache_dir):
+                for fname in os.listdir(cache_dir):
+                    if fname.startswith("features_") and fname.endswith(".pkl"):
+                        try:
+                            os.remove(os.path.join(cache_dir, fname))
+                            logger.info(f"Cleared feature cache: {fname}")
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.warning(f"Failed to clear feature cache: {e}")
+
     def _fetch_season_data(self, year: int, force_refresh: bool = False):
         schedule = fastf1.get_event_schedule(year, include_testing=False)
         if schedule.empty:
             logger.warning(f"No schedule found for {year}.")
             return
 
-        for _, event in schedule.sort_values("RoundNumber").iterrows():
+        # Sort by round number
+        schedule = schedule.sort_values("RoundNumber")
+
+        # Iterate using index to preserve Event object methods (subclass of Series)
+        for i in schedule.index:
+            event = schedule.loc[i]
             round_num = event["RoundNumber"]
 
-                                                
-                                                                      
+            # Check for future events
             event_dt = pd.to_datetime(event['EventDate'], errors='coerce')
             if pd.notna(event_dt):
-                                                            
                 try:
                     event_dt = event_dt.tz_convert("UTC")
                 except Exception:
@@ -179,6 +288,7 @@ class F1DataCollector:
             if round_num == 0 or (
                 not force_refresh and (year, round_num) in self.existing_events
             ):
+                # logger.debug(f"Skipping {year} Round {round_num} (already exists)")
                 continue
 
             logger.info(f"Processing {year} Round {round_num}: {event['EventName']}")
@@ -192,17 +302,23 @@ class F1DataCollector:
                 self._append_and_save(quali_df, config.get("paths.quali_csv"))
                 self._update_ingestion_state(year, round_num, quali_df)
 
-                                                       
+            # Respectful delay
             time.sleep(config.get("data_collection.fastf1.fetch_delay", 1.5))
 
     def _fetch_session_with_retry(
-        self, year: int, round_num: int, session_code: str, event: pd.Series
+        self, year: int, round_num: int, session_code: str, event: Any
     ) -> pd.DataFrame:
         max_retries = config.get("data_collection.fastf1.api_max_retries", 3)
         base_delay = config.get("data_collection.fastf1.api_retry_delay", 60)
         for attempt in range(max_retries):
             try:
-                session = fastf1.get_session(year, round_num, session_code)
+                # Optimization: Use event.get_session() if available to avoid re-fetching schedule
+                # This significantly reduces API calls and prevents RateLimitExceededError
+                if hasattr(event, "get_session"):
+                    session = event.get_session(session_code)
+                else:
+                    session = fastf1.get_session(year, round_num, session_code)
+                
                 session.load(laps=True, telemetry=False, weather=True, messages=False)
                 if session_code == "R":
                     return self._extract_race_data(session, event)
@@ -313,13 +429,19 @@ class F1DataCollector:
             new_data["Driver"] = new_data["Driver"].astype(str)
         with suppress(Exception):
             new_data["Team"] = new_data["Team"].astype(str)
-                                                           
+        with suppress(Exception):
+            new_data["Circuit"] = new_data["Circuit"].astype(str)
+
+        # Apply canonical names and add stable IDs before persisting
         new_data = self._apply_canonicalization(new_data)
+        new_data = add_entity_ids(new_data)
 
         combined = pd.concat([existing, new_data])
-        combined.drop_duplicates(
-            subset=["Year", "Race_Num", "Driver"], keep="last", inplace=True
-        )
+        # Deduplicate by event and driver identity; prefer Driver_ID when available
+        subset_keys = [c for c in ["Year", "Race_Num", "Driver_ID"] if c in combined.columns]
+        if len(subset_keys) < 3:
+            subset_keys = [c for c in ["Year", "Race_Num", "Driver"] if c in combined.columns]
+        combined.drop_duplicates(subset=subset_keys, keep="last", inplace=True)
         combined.to_csv(filepath, index=False)
 
     def _update_ingestion_state(self, year: int, round_num: int, df: pd.DataFrame) -> None:
@@ -399,25 +521,42 @@ class F1DataLoader:
                                                                         
         if not hist_races.empty:
             hist_races = self._apply_canonicalization(hist_races)
+            hist_races = add_entity_ids(hist_races)
+            try:
+                # Deterministic ordering and stable grouping keys
+                with suppress(Exception):
+                    hist_races["Year"] = pd.to_numeric(hist_races["Year"], errors="coerce").astype("Int64")
+                with suppress(Exception):
+                    hist_races["Race_Num"] = pd.to_numeric(hist_races["Race_Num"], errors="coerce").astype("Int64")
+                if {"Year", "Race_Num"}.issubset(hist_races.columns):
+                    hist_races.sort_values(["Year", "Race_Num", "Driver"], inplace=True, kind="mergesort")
+                    # Emit event identifier for convenience (string, safe for CSV)
+                    y = hist_races["Year"].astype("Int64").astype("string")
+                    r = hist_races["Race_Num"].astype("Int64").astype("string")
+                    hist_races["Event_ID"] = y.str.zfill(4) + "-" + r.str.zfill(2)
+            except Exception:
+                pass
         if not hist_quali.empty:
             hist_quali = self._apply_canonicalization(hist_quali)
+            hist_quali = add_entity_ids(hist_quali)
+            try:
+                with suppress(Exception):
+                    hist_quali["Year"] = pd.to_numeric(hist_quali["Year"], errors="coerce").astype("Int64")
+                with suppress(Exception):
+                    hist_quali["Race_Num"] = pd.to_numeric(hist_quali["Race_Num"], errors="coerce").astype("Int64")
+                if {"Year", "Race_Num"}.issubset(hist_quali.columns):
+                    hist_quali.sort_values(["Year", "Race_Num", "Driver"], inplace=True, kind="mergesort")
+                    yq = hist_quali["Year"].astype("Int64").astype("string")
+                    rq = hist_quali["Race_Num"].astype("Int64").astype("string")
+                    hist_quali["Event_ID"] = yq.str.zfill(4) + "-" + rq.str.zfill(2)
+            except Exception:
+                pass
         return hist_races, hist_quali
 
     def _apply_canonicalization(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Apply driver/team canonicalization mappings from config if present.
-
-        This mirrors the logic used during ingestion to ensure consistent identifiers
-        across all loader outputs as well.
-        """
+        """Apply driver/team/circuit canonicalization maps and normalize circuit names."""
         try:
-            drivers_map: Dict[str, str] = config.get("feature_engineering.canonicalization.drivers", {}) or {}
-            teams_map: Dict[str, str] = config.get("feature_engineering.canonicalization.teams", {}) or {}
-            out = df.copy()
-            if "Driver" in out.columns and drivers_map:
-                out["Driver"] = out["Driver"].astype(str).map(lambda x: drivers_map.get(x, x))
-            if "Team" in out.columns and teams_map:
-                out["Team"] = out["Team"].astype(str).map(lambda x: teams_map.get(x, x))
-            return out
+            return canonicalize_entities(df)
         except Exception:
             return df
 
@@ -574,6 +713,7 @@ class F1DataLoader:
             )
                                                   
             upcoming_info = self._apply_canonicalization(upcoming_info)
+            upcoming_info = add_entity_ids(upcoming_info)
             return upcoming_info
         except Exception as e:
             logger.error(f"Failed to generate upcoming race info for {year}: {e}")
@@ -614,6 +754,7 @@ class F1DataLoader:
                     info[k] = v
                                                   
             info = self._apply_canonicalization(info)
+            info = add_entity_ids(info)
             return info
         except Exception as e:
             logger.error(f"Failed to generate race info for {year} {race_name}: {e}")
